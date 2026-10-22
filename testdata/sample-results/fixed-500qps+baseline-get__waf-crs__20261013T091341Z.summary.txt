@@ -1,0 +1,6 @@
+scenario=fixed-500qps+baseline-get tag=waf-crs
+window_utc=1791882836..1791882965
+actual_qps=499.9 requested_qps=500
+count=60000 avg_ms=16.80 min_ms=5.90 max_ms=59.33
+p50_ms=17.00 p90_ms=22.97 p95_ms=24.22 p99_ms=28.46 p99.9_ms=46.62
+ret_codes={'200': 60000} blocked_pct=0.000 error_pct=0.000

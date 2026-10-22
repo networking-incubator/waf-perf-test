@@ -1,0 +1,6 @@
+scenario=fixed-500qps+args-heavy tag=waf-crs
+window_utc=1791884068..1791884197
+actual_qps=396.5 requested_qps=500
+count=47591 avg_ms=40.34 min_ms=8.81 max_ms=107.16
+p50_ms=39.48 p90_ms=49.17 p95_ms=55.48 p99_ms=67.98 p99.9_ms=84.00
+ret_codes={'200': 47591} blocked_pct=0.000 error_pct=0.000

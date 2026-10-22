@@ -1,0 +1,6 @@
+scenario=fixed-500qps+args-heavy tag=waf-medium
+window_utc=1791883882..1791884012
+actual_qps=500.0 requested_qps=500
+count=60000 avg_ms=6.16 min_ms=2.12 max_ms=52.41
+p50_ms=6.04 p90_ms=7.64 p95_ms=7.97 p99_ms=9.80 p99.9_ms=28.46
+ret_codes={'200': 60000} blocked_pct=0.000 error_pct=0.000

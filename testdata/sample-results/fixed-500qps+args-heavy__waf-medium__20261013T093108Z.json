@@ -1,0 +1,313 @@
+{
+  "RunType": "HTTP",
+  "Labels": "perf-gateway-istio.waf-perf.svc.cluster.local:80/search?q=shoes\u0026page=2\u0026sort=price\u0026order=desc\u0026lang=en\u0026currency=usd\u0026size=42\u0026color=blue\u0026brand=acme\u0026min=10\u0026max=500\u0026instock=1\u0026rating=4\u0026ship=free\u0026cat=footwear\u0026sub=running\u0026gender=u\u0026width=d\u0026material=mesh\u0026season=ss26\u0026promo=none\u0026ref=homepage\u0026sid=abc123\u0026utm_source=email\u0026utm_campaign=spring , perf-run-1791883882-2631-nv6zb",
+  "StartTime": "2026-10-13T09:31:24.580271581Z",
+  "RequestedQPS": "500",
+  "RequestedDuration": "2m0s",
+  "ActualQPS": 499.9738941131058,
+  "ActualDuration": 120006265740,
+  "NumThreads": 16,
+  "Version": "1.76.0",
+  "DurationHistogram": {
+    "Count": 60000,
+    "Min": 0.002119554,
+    "Max": 0.052414075,
+    "Sum": 369.56545713399987,
+    "Avg": 0.006159424285566664,
+    "StdDev": 0.0016789469174318897,
+    "Data": [
+      {
+        "Start": 0.002119554,
+        "End": 0.003,
+        "Percent": 0.051666666666666666,
+        "Count": 31
+      },
+      {
+        "Start": 0.003,
+        "End": 0.004,
+        "Percent": 1.68,
+        "Count": 977
+      },
+      {
+        "Start": 0.004,
+        "End": 0.005,
+        "Percent": 15.608333333333333,
+        "Count": 8357
+      },
+      {
+        "Start": 0.005,
+        "End": 0.006,
+        "Percent": 48.623333333333335,
+        "Count": 19809
+      },
+      {
+        "Start": 0.006,
+        "End": 0.007,
+        "Percent": 80.15833333333333,
+        "Count": 18921
+      },
+      {
+        "Start": 0.007,
+        "End": 0.008,
+        "Percent": 95.42,
+        "Count": 9157
+      },
+      {
+        "Start": 0.008,
+        "End": 0.009000000000000001,
+        "Percent": 98.52166666666666,
+        "Count": 1861
+      },
+      {
+        "Start": 0.009000000000000001,
+        "End": 0.01,
+        "Percent": 99.11666666666666,
+        "Count": 357
+      },
+      {
+        "Start": 0.01,
+        "End": 0.011,
+        "Percent": 99.28833333333333,
+        "Count": 103
+      },
+      {
+        "Start": 0.011,
+        "End": 0.012,
+        "Percent": 99.47166666666666,
+        "Count": 110
+      },
+      {
+        "Start": 0.012,
+        "End": 0.014,
+        "Percent": 99.61166666666666,
+        "Count": 84
+      },
+      {
+        "Start": 0.014,
+        "End": 0.016,
+        "Percent": 99.69666666666667,
+        "Count": 51
+      },
+      {
+        "Start": 0.016,
+        "End": 0.018000000000000002,
+        "Percent": 99.80333333333333,
+        "Count": 64
+      },
+      {
+        "Start": 0.018000000000000002,
+        "End": 0.02,
+        "Percent": 99.84666666666666,
+        "Count": 26
+      },
+      {
+        "Start": 0.02,
+        "End": 0.025,
+        "Percent": 99.855,
+        "Count": 5
+      },
+      {
+        "Start": 0.025,
+        "End": 0.03,
+        "Percent": 99.92,
+        "Count": 39
+      },
+      {
+        "Start": 0.03,
+        "End": 0.035,
+        "Percent": 99.96,
+        "Count": 24
+      },
+      {
+        "Start": 0.035,
+        "End": 0.04,
+        "Percent": 99.97333333333333,
+        "Count": 8
+      },
+      {
+        "Start": 0.05,
+        "End": 0.052414075,
+        "Percent": 100,
+        "Count": 16
+      }
+    ],
+    "Percentiles": [
+      {
+        "Percentile": 50,
+        "Value": 0.006043655197928228
+      },
+      {
+        "Percentile": 75,
+        "Value": 0.006836425136092172
+      },
+      {
+        "Percentile": 90,
+        "Value": 0.0076448618543191
+      },
+      {
+        "Percentile": 95,
+        "Value": 0.007972480069891886
+      },
+      {
+        "Percentile": 99,
+        "Value": 0.009803921568627461
+      },
+      {
+        "Percentile": 99.9,
+        "Value": 0.028461538461538715
+      }
+    ]
+  },
+  "ErrorsDurationHistogram": {
+    "Count": 0,
+    "Min": 0,
+    "Max": 0,
+    "Sum": 0,
+    "Avg": 0,
+    "StdDev": 0,
+    "Data": null
+  },
+  "Exactly": 0,
+  "Jitter": false,
+  "Uniform": false,
+  "NoCatchUp": false,
+  "RunID": 0,
+  "AccessLoggerInfo": "",
+  "ID": "2026-10-13-093124_perf_gateway_istio_waf_perf_svc_cluster_local_80_search_q_shoes_page_2_sort_pr",
+  "RetCodes": {
+    "200": 60000
+  },
+  "IPCountMap": {
+    "172.30.103.247:80": 16
+  },
+  "Insecure": false,
+  "MTLS": false,
+  "CACert": "",
+  "Cert": "",
+  "Key": "",
+  "UnixDomainSocket": "",
+  "URL": "http://perf-gateway-istio.waf-perf.svc.cluster.local:80/search?q=shoes\u0026page=2\u0026sort=price\u0026order=desc\u0026lang=en\u0026currency=usd\u0026size=42\u0026color=blue\u0026brand=acme\u0026min=10\u0026max=500\u0026instock=1\u0026rating=4\u0026ship=free\u0026cat=footwear\u0026sub=running\u0026gender=u\u0026width=d\u0026material=mesh\u0026season=ss26\u0026promo=none\u0026ref=homepage\u0026sid=abc123\u0026utm_source=email\u0026utm_campaign=spring",
+  "NumConnections": 1,
+  "Compression": false,
+  "DisableFastClient": false,
+  "HTTP10": false,
+  "H2": false,
+  "DisableKeepAlive": false,
+  "AllowHalfClose": false,
+  "FollowRedirects": false,
+  "Resolve": "",
+  "HTTPReqTimeOut": 3000000000,
+  "UserCredentials": "",
+  "ContentType": "",
+  "Payload": "",
+  "MethodOverride": "",
+  "LogErrors": true,
+  "SequentialWarmup": false,
+  "ConnReuseRange": [
+    0,
+    0
+  ],
+  "NoResolveEachConn": false,
+  "Offset": 0,
+  "Resolution": 0.001,
+  "Sizes": {
+    "Count": 60000,
+    "Min": 1832,
+    "Max": 1833,
+    "Sum": 109920029,
+    "Avg": 1832.0004833333332,
+    "StdDev": 0.021979533067394245,
+    "Data": [
+      {
+        "Start": 1832,
+        "End": 1833,
+        "Percent": 100,
+        "Count": 60000
+      }
+    ]
+  },
+  "HeaderSizes": {
+    "Count": 60000,
+    "Min": 198,
+    "Max": 199,
+    "Sum": 11880029,
+    "Avg": 198.00048333333334,
+    "StdDev": 0.021979529632415788,
+    "Data": [
+      {
+        "Start": 198,
+        "End": 199,
+        "Percent": 100,
+        "Count": 60000
+      }
+    ]
+  },
+  "Sockets": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+  ],
+  "SocketCount": 16,
+  "ConnectionStats": {
+    "Count": 16,
+    "Min": 0.002115194,
+    "Max": 0.004998148,
+    "Sum": 0.042316604,
+    "Avg": 0.00264478775,
+    "StdDev": 0.0006535316995188999,
+    "Data": [
+      {
+        "Start": 0.002115194,
+        "End": 0.003,
+        "Percent": 93.75,
+        "Count": 15
+      },
+      {
+        "Start": 0.004,
+        "End": 0.004998148,
+        "Percent": 100,
+        "Count": 1
+      }
+    ],
+    "Percentiles": [
+      {
+        "Percentile": 50,
+        "Value": 0.002557597
+      },
+      {
+        "Percentile": 75,
+        "Value": 0.0028103987142857143
+      },
+      {
+        "Percentile": 90,
+        "Value": 0.002962079742857143
+      },
+      {
+        "Percentile": 95,
+        "Value": 0.0041996296
+      },
+      {
+        "Percentile": 99,
+        "Value": 0.00483844432
+      },
+      {
+        "Percentile": 99.9,
+        "Value": 0.004982177632000001
+      }
+    ]
+  },
+  "AbortOn": 0
+}
