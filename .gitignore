@@ -1,4 +1,21 @@
-# Path A (in-cluster) run outputs — raw JSON, summaries, collected metrics
+# Run output — raw fortio JSON, summaries, collected metrics.
 results/
-# Generated self-contained report (regenerate with scripts/report.py)
+
+# Generated self-contained report (regenerate with scripts/report.py).
 dashboard.html
+
+# Python bytecode and tool caches.
+__pycache__/
+*.py[cod]
+.mypy_cache/
+
+# Local virtualenv for `pip install -r requirements.txt`.
+.venv/
+venv/
+
+# Editor and OS noise.
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

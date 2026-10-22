@@ -1,0 +1,3 @@
+# generate-report.py imports yaml unguarded to read rule counts out of
+# manifests/rulesets/*.yaml. Without this it fails at import.
+PyYAML==6.0.3
