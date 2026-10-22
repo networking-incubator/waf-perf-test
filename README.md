@@ -196,9 +196,12 @@ requires the operator's cache prerequisites.
 - **CPU requests = limits** (guaranteed QoS) to avoid throttling
 - Optional: Prometheus with retention ≥1h at ≤15s scrape interval
 
-Istio installation is out of scope for this harness; use `hack/install-istio.sh`
-(detects the platform and installs Sail Operator on OpenShift, upstream Istio on
-Kubernetes) or see [DEVELOPMENT.md](../../DEVELOPMENT.md).
+Istio installation is out of scope for this harness. Install the [Sail
+Operator](https://github.com/istio-ecosystem/sail-operator) on OpenShift, or
+[upstream Istio](https://istio.io/latest/docs/setup/install/) on Kubernetes; the
+operator's own
+[DEVELOPMENT.md](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/DEVELOPMENT.md)
+covers the cluster prerequisites.
 
 ---
 
@@ -680,7 +683,10 @@ the scenario *name*, update the glob in `find_latest_result()`
 
 ### Regenerating CRS
 
-Only needed to bump the CRS version. From the repo root:
+Only needed to bump the CRS version. `kubectl coraza` is built from the operator
+repo, not this one — download a `kubectl-coraza` binary from the
+[operator's releases](https://github.com/networking-incubator/coraza-kubernetes-operator/releases)
+(cut by its `release.kubectl-plugin` target) and put it on your `PATH` first.
 
 ```bash
 curl -sL https://github.com/coreruleset/coreruleset/archive/refs/tags/v4.7.0.tar.gz | tar -xz -C /tmp
@@ -689,7 +695,7 @@ kubectl coraza generate coreruleset \
   --ruleset-name perf-ruleset \
   --ignore-unsupported-rules wasm \
   --ignore-rules 920420 \
-  > test/performance/manifests/rulesets/crs.yaml
+  > manifests/rulesets/crs.yaml
 ```
 
 Two things are hand-added to the generated file and must be re-added afterwards,
@@ -719,8 +725,22 @@ initialize it in the template.
   is `optional` — so a profile whose payload was never built would send an empty
   body. `run.sh` guards against this by checking the key exists in the ConfigMap
   before measuring, and aborts with the `gen-payloads.sh` + `setup.sh` fix.
-- **`generate-report.py` is hardcoded to the `fixed-500qps` scenario** in
-  `find_latest_result()`.
+- **Both analysis scripts are hardcoded to the `fixed-500qps` scenario.**
+  `generate-report.py` and `analyze-results.py` each carry their own copy of the
+  glob in `find_latest_result()`, so a renamed scenario has to be changed in two
+  places or one of the two silently finds nothing.
+- **Every report claims the author's cluster.** `generate-report.py` bakes
+  `OpenShift 4.22.18`, Istio `v1.27.5`, operator `v0.5.0`, `Fortio 1.76.0` and
+  `500 req/s` in as literals (lines 1226–1230), and
+  `templates/report-template.html` repeats the operator version (line 908),
+  Istio (line 924) and the platform (lines 884 and 920). Nothing reads those
+  facts off the cluster, so a generated report asserts them whatever you
+  actually ran against. Correct them by hand before circulating a number.
+- **The fortio image is unpinned.** `manifests/loadgen.yaml` and `lib.sh` both
+  pull `fortio/fortio:latest`, which sits badly with the Fortio v1.76+ line in
+  [Dependencies](#dependencies) — two sessions weeks apart may not have measured
+  with the same load generator. Set `LOADGEN_IMAGE` to a tagged release if the
+  runs have to be comparable over time.
 
 ---
 
@@ -799,12 +819,13 @@ ls -l templates/report-template.html
 ## File structure
 
 ```
-test/performance/
+waf-perf-test/
 ├── README.md                     # this file
 ├── lib.sh                        # shared config + helpers (sourced, not run)
 ├── run-comprehensive-tests.sh    # the 12-cell matrix + report
 ├── generate-report.py            # matrix report generator
 ├── analyze-results.py            # data analysis helper
+├── requirements.txt              # Python deps for the report generators
 ├── scripts/
 │   ├── setup.sh                  # provision namespace, backend, loadgen, gateway
 │   ├── waf.sh                    # on <ruleset> | off | status
@@ -831,9 +852,16 @@ test/performance/
 
 ### Dependencies
 
-Python 3.7+ and a modern browser for reports. For runs: Kubernetes v1.32+ or
-OpenShift v4.20+, Istio v1.27+, Fortio v1.76+, and
-coraza-kubernetes-operator v0.5.0+. Prometheus and Grafana are optional.
+Python 3.7+ and a modern browser for reports. `generate-report.py` imports
+`yaml` unguarded, so PyYAML is required, not optional — it is pinned in
+`requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
+For runs: Kubernetes v1.32+ or OpenShift v4.20+, Istio v1.27+, Fortio v1.76+,
+and coraza-kubernetes-operator v0.5.0+. Prometheus and Grafana are optional.
 
 ### Related docs
 
@@ -841,13 +869,13 @@ coraza-kubernetes-operator v0.5.0+. Prometheus and Grafana are optional.
 |---|---|
 | Load profile details | `manifests/load-profiles/README.md` |
 | Driving this harness as an agent | `.claude/skills/perf-test/SKILL.md` |
-| Cluster and Istio setup | `../../DEVELOPMENT.md` |
-| Two-plane split, metric contract | `docs/driver-metrics-contract.md` |
-| Controllers, cache server, Istio prerequisites | `docs/content/explanation/architecture.md` |
-| WASM integration, poll loop, target selection | `docs/content/explanation/istio-wasm-integration.md` |
-| Rule aggregation and validation lifecycle | `docs/content/explanation/rule-processing.md` |
-| Operator metrics and cardinality | `docs/content/reference/metrics-cardinality.md` |
-| CLI flags and cache tuning | `docs/content/reference/operator-cli-flags.md` |
+| Cluster and Istio setup | [operator `DEVELOPMENT.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/DEVELOPMENT.md) |
+| Two-plane split, metric contract | [operator `docs/driver-metrics-contract.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md) |
+| Controllers, cache server, Istio prerequisites | [operator `docs/content/explanation/architecture.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/explanation/architecture.md) |
+| WASM integration, poll loop, target selection | [operator `docs/content/explanation/istio-wasm-integration.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/explanation/istio-wasm-integration.md) |
+| Rule aggregation and validation lifecycle | [operator `docs/content/explanation/rule-processing.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/explanation/rule-processing.md) |
+| Operator metrics and cardinality | [operator `docs/content/reference/metrics-cardinality.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/reference/metrics-cardinality.md) |
+| CLI flags and cache tuning | [operator `docs/content/reference/operator-cli-flags.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/content/reference/operator-cli-flags.md) |
 
 ### External links
 

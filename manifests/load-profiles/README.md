@@ -3,7 +3,7 @@
 A **load profile** defines the *shape* of each request: method, path, query
 args, headers, body, content type.
 
-It is deliberately separate from a **scenario** (`test/performance/scenarios/`),
+It is deliberately separate from a **scenario** (`scenarios/` at the repo root),
 which defines load *intensity* — QPS, duration, connection count. The two
 compose, so a test is three independent choices:
 

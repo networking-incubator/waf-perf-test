@@ -3,7 +3,12 @@
 #     --rules-dir <crs-4.7.0>/rules --version 4.7.0 \
 #     --ruleset-name perf-ruleset \
 #     --ignore-unsupported-rules wasm \
-#     --ignore-rules 920420
+#     --ignore-rules 920420 \
+#     > manifests/rulesets/crs.yaml
+#
+# kubectl-coraza is built from the coraza-kubernetes-operator repo, not this
+# one. Download a binary from its releases before regenerating:
+#   https://github.com/networking-incubator/coraza-kubernetes-operator/releases
 #
 # --ignore-rules 920420: under coraza-proxy-wasm, CRS 920420 ("Request content
 # type is not allowed by policy", CRITICAL = anomaly score 5, which alone meets

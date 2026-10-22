@@ -1,7 +1,7 @@
 # Commands and flags reference
 
-Every command is run from `test/performance/`. The scripts `cd` to that
-directory themselves, so they also work when invoked by absolute path.
+Every command is run from the repository root. The scripts `cd` there
+themselves, so they also work when invoked by absolute path.
 
 ## One-time setup
 
