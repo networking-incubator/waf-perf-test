@@ -79,5 +79,5 @@ Carried over from the harness's previous home and deliberately not fixed, so the
 
 - Shell scripts are `set -euo pipefail` and source `lib.sh` for shared config. Every tunable is an environment variable with a default in `lib.sh`; add new ones there rather than inline.
 - Comments in these scripts frequently record why a past approach failed. Preserve them when editing.
-- `results/` is ignored. Fixture data for exercising the report generators lives in `testdata/sample-results/` and was measured on another cluster; no number in it is reportable here.
+- `results/` is ignored. Fixture data for exercising the report generators lives in `testdata/sample-results/` and was measured on another cluster; no number in it is reportable here. Never copy it into `results/`: the per-scenario report medians every run it finds for a tag, so a fixture left there silently averages another cluster into the delta.
 - Do not quote figures from `README.md` or any previous run. Regenerate the report and read the current data.

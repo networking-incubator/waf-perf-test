@@ -18,8 +18,9 @@ guardrails, and the delta analysis.
 
 Read `README.md` (architecture, the three axes, methodology, tiers, scenarios,
 known limitations) if you need background — it owns the *why* behind every rule
-below. All scripts `cd` to the repo root themselves, so they can be invoked by
-path from anywhere.
+below. `CLAUDE.md` at the repo root is this repository's agent contract and is
+authoritative where it and this skill disagree. All scripts `cd` to the repo
+root themselves, so they can be invoked by path from anywhere.
 
 ## Prerequisites (verify first)
 
@@ -325,7 +326,7 @@ of a suite, writing `results/<scenario>+<profile>.html`.
 
 ```bash
 scripts/report.py                 # single scenario in results/
-scripts/report.py --scenario fixed-500qps --out results/fixed-500qps.html
+scripts/report.py --scenario fixed-500qps+args-light --out results/fixed-500qps+args-light.html
 ```
 
 `generate-report.py` (matrix HTML) and `analyze-results.py` (matrix text tables)

@@ -821,6 +821,9 @@ ls -l templates/report-template.html
 ```
 waf-perf-test/
 ├── README.md                     # this file
+├── CLAUDE.md                     # agent contract: guardrails + routing
+├── LICENSE                       # Apache-2.0
+├── NOTICE                        # vendored CoreRuleSet attribution
 ├── lib.sh                        # shared config + helpers (sourced, not run)
 ├── run-comprehensive-tests.sh    # the 12-cell matrix + report
 ├── generate-report.py            # matrix report generator
@@ -845,7 +848,12 @@ waf-perf-test/
 │   └── load-profiles/            # request shapes + payloads + README
 ├── templates/
 │   └── report-template.html      # matrix report template
-└── results/                      # raw JSON, summaries, generated HTML
+├── testdata/
+│   └── sample-results/           # report-generator fixture (another cluster)
+├── .claude/
+│   └── skills/perf-test/         # agent skill for driving this harness
+├── docs/plans/                   # planning artifacts
+└── results/                      # raw JSON, summaries, generated HTML (ignored)
 ```
 
 ---
@@ -862,7 +870,7 @@ The vendored OWASP CoreRuleSet content in `manifests/rulesets/crs.yaml` is redis
 
 ### Dependencies
 
-Python 3.7+ and a modern browser for reports. `generate-report.py` imports
+Python 3.8+ and a modern browser for reports. `generate-report.py` imports
 `yaml` unguarded, so PyYAML is required, not optional — it is pinned in
 `requirements.txt`:
 
@@ -878,6 +886,7 @@ and coraza-kubernetes-operator v0.5.0+. Prometheus and Grafana are optional.
 | Topic | Doc |
 |---|---|
 | Load profile details | `manifests/load-profiles/README.md` |
+| Agent contract: guardrails and routing | `CLAUDE.md` |
 | Driving this harness as an agent | `.claude/skills/perf-test/SKILL.md` |
 | Cluster and Istio setup | [operator `DEVELOPMENT.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/DEVELOPMENT.md) |
 | Two-plane split, metric contract | [operator `docs/driver-metrics-contract.md`](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/docs/driver-metrics-contract.md) |
