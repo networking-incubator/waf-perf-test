@@ -1,0 +1,8 @@
+This repository redistributes content from the OWASP CoreRuleSet project.
+
+The file manifests/rulesets/crs.yaml is a generated artifact derived from the
+OWASP CoreRuleSet v4.7.0, available at:
+  https://github.com/coreruleset/coreruleset
+
+The OWASP CoreRuleSet is licensed under the Apache License, Version 2.0.
+See the in-file copyright notices in manifests/rulesets/crs.yaml for details.

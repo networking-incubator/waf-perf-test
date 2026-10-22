@@ -848,6 +848,16 @@ waf-perf-test/
 └── results/                      # raw JSON, summaries, generated HTML
 ```
 
+---
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [`LICENSE`](LICENSE) for the full text.
+
+The vendored OWASP CoreRuleSet content in `manifests/rulesets/crs.yaml` is redistributed under its original Apache-2.0 license. See [`NOTICE`](NOTICE) for attribution.
+
+---
+
 ## References
 
 ### Dependencies
