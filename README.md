@@ -33,26 +33,80 @@ the **delta against a WAF-off baseline captured in the same session** — see
 
 ## Quick start
 
-Regenerate the matrix report from results already in `results/` — no cluster
-needed:
+### 1. Run the perf test
+
+Against a live cluster, with Istio, the Gateway API CRDs and the Coraza operator
+already installed (this harness installs none of them — see
+[Environment requirements](#environment-requirements)):
+
+```bash
+scripts/setup.sh              # namespace, backend, loadgen, Gateway, payloads
+
+# canonical run: WAF-off baseline first, then one measured run per ruleset
+LOAD_PROFILE=args-heavy scripts/suite.sh scenarios/fixed-500qps.env minimal medium crs
+```
+
+`suite.sh` is the entry point to use. It captures the WAF-off baseline in the
+same session, waits out the settle window after each toggle, and discards a
+warm-up before every measured run — the number is meaningless without those.
+
+**Invoke it at least three times per data point.** No script loops, and one run
+is noise; the report medians the repeats it finds. Change one axis per run
+(load intensity, request shape, ruleset size) and pin the other two.
+
+For a one-off run of a single cell instead:
+
+```bash
+LOAD_PROFILE=baseline-get scripts/run.sh scenarios/fixed-500qps.env waf-crs
+```
+
+Or sweep the whole 3×4 matrix — one repeat per cell, so indicative only:
+
+```bash
+./run-comprehensive-tests.sh
+```
+
+It takes roughly **45–55 minutes**: 12 runs × (10s warm-up + 120s measured +
+25s settle + overhead), plus a 15s pause between profiles.
+
+When you are done:
+
+```bash
+scripts/teardown.sh           # deletes the namespace; results/ is kept
+```
+
+### 2. Generate the HTML report
+
+Reporting needs no cluster — it reads the JSON already in `results/`:
+
+```bash
+pip install -r requirements.txt
+```
+
+`suite.sh` already writes `results/<scenario>+<profile>.html` at the end of each
+invocation. Regenerate it by hand — after the repeats, so the medians cover all
+of them:
+
+```bash
+python3 scripts/report.py --scenario fixed-500qps+args-heavy \
+  --out results/fixed-500qps+args-heavy.html
+open results/fixed-500qps+args-heavy.html
+```
+
+This is the one to report from: it medians the repeats and computes the delta
+against the WAF-off baseline per percentile. Read p95 and p99, never the
+average.
+
+For a matrix overview after `run-comprehensive-tests.sh`:
 
 ```bash
 python3 generate-report.py
 open results/performance-report.html
 ```
 
-Run the full 3×4 matrix against a live cluster (operator and Istio already
-installed):
-
-```bash
-scripts/setup.sh              # namespace, backend, loadgen, Gateway, payloads
-./run-comprehensive-tests.sh  # 12 runs, then generates the report
-scripts/teardown.sh           # optional; results/ is kept
-```
-
-`run-comprehensive-tests.sh` takes roughly **45–55 minutes**: 12 runs ×
-(10s warm-up + 120s measured + 25s settle + overhead), plus a 15s pause between
-profiles.
+Correct the cluster, Istio, operator and Fortio versions by hand before
+circulating anything from `generate-report.py` — it hardcodes the author's
+cluster. See [Known limitations](#known-limitations).
 
 ---
 
