@@ -38,6 +38,8 @@ An `ActualQPS` shortfall is itself a finding — the system could not hold the o
 All scripts resolve their own paths, so they work when invoked from anywhere.
 
 ```bash
+scripts/prereqs/check.sh              # verify cluster prerequisites; run before setup.sh
+scripts/prereqs/install-all.sh        # one-time: Gateway API, Istio, operator
 scripts/setup.sh                      # provision namespace, backend, loadgen, Gateway, payloads
 scripts/waf.sh on <minimal|medium|crs>  # or: off | status
 scripts/suite.sh <scenario-file> [rulesets...]   # canonical: baseline then one run per ruleset
@@ -58,11 +60,23 @@ python3 generate-report.py                    # the full 3x4 matrix
 
 For a guided run, the bundled skill at `.claude/skills/perf-test/SKILL.md` carries the correct ordering and the delta analysis. It defers to this file where the two disagree.
 
-## Prerequisites this harness does not install
+## Prerequisites
+
+A measurement run installs nothing. The cluster-side pieces are installed once,
+beforehand, by `scripts/prereqs/` — never from `setup.sh` or during a session,
+because installing Istio restarts the gateway proxy and breaks the
+same-session baseline. `scripts/prereqs/check.sh` reports what is missing;
+`docs/prerequisites.md` explains each piece.
 
 - A Kubernetes v1.32+ or OpenShift v4.20+ cluster with Istio and the Gateway API CRDs.
-- The Coraza Kubernetes Operator, already installed. This harness never installs it.
-- Local tools: `kubectl` or `oc`, `envsubst`, `python3`, `curl`.
+  On OpenShift, Istio is installed by the cluster ingress operator in response to a
+  GatewayClass — do not install a second control plane by hand.
+- The Coraza Kubernetes Operator, from its published Helm chart. Pin
+  `CORAZA_CHART_VERSION` for anything reportable.
+- Local tools: `kubectl` or `oc`, `envsubst`, `python3`, `curl`; plus `helm` and,
+  on Kubernetes, `istioctl` for the prereq scripts.
+- `PLATFORM=openshift` exported on OpenShift. It drives both the CLI and the
+  gateway class, and nothing downstream works if it is wrong.
 - For metrics collection, a reachable Prometheus with the operator's ServiceMonitor and PodMonitor enabled.
 - Dedicated node pools and guaranteed QoS for the load generator, Gateway, and backend. Without them you are measuring CPU throttling.
 

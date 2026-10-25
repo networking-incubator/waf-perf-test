@@ -33,11 +33,25 @@ the **delta against a WAF-off baseline captured in the same session** — see
 
 ## Quick start
 
-### 1. Run the perf test
+### 1. Prepare the cluster
 
-Against a live cluster, with Istio, the Gateway API CRDs and the Coraza operator
-already installed (this harness installs none of them — see
-[Environment requirements](#environment-requirements)):
+A measurement run assumes Istio, the Gateway API CRDs and the Coraza operator
+are already on the cluster. `setup.sh` does not check, and a missing piece
+shows up as a hang on the Gateway readiness wait rather than an error, so
+check first:
+
+```bash
+export PLATFORM=openshift        # omit on vanilla Kubernetes; drives CLI and gateway class
+scripts/prereqs/check.sh         # what is missing
+scripts/prereqs/install-all.sh   # install it (one-time; safe to re-run)
+```
+
+Full detail, the manual equivalents, and why OpenShift installs Istio
+differently: [docs/prerequisites.md](docs/prerequisites.md). Run this before
+the session you intend to report — never between a baseline and a WAF-on run,
+since installing Istio restarts the gateway proxy.
+
+### 2. Run the perf test
 
 ```bash
 scripts/setup.sh              # namespace, backend, loadgen, Gateway, payloads
@@ -75,13 +89,12 @@ When you are done:
 scripts/teardown.sh           # deletes the namespace; results/ is kept
 ```
 
-### 2. Generate the HTML report
+### 3. Generate the HTML report
 
-Reporting needs no cluster — it reads the JSON already in `results/`:
-
-```bash
-pip install -r requirements.txt
-```
+Reporting needs no cluster — it reads the JSON already in `results/`.
+`scripts/report.py` uses only the standard library; `pip install -r
+requirements.txt` is needed for `generate-report.py` further down, which reads
+rule counts out of the manifests with PyYAML.
 
 `suite.sh` already writes `results/<scenario>+<profile>.html` at the end of each
 invocation. Regenerate it by hand — after the repeats, so the medians cover all
@@ -100,6 +113,7 @@ average.
 For a matrix overview after `run-comprehensive-tests.sh`:
 
 ```bash
+pip install -r requirements.txt
 python3 generate-report.py
 open results/performance-report.html
 ```
@@ -250,12 +264,16 @@ requires the operator's cache prerequisites.
 - **CPU requests = limits** (guaranteed QoS) to avoid throttling
 - Optional: Prometheus with retention ≥1h at ≤15s scrape interval
 
-Istio installation is out of scope for this harness. Install the [Sail
-Operator](https://github.com/istio-ecosystem/sail-operator) on OpenShift, or
-[upstream Istio](https://istio.io/latest/docs/setup/install/) on Kubernetes; the
-operator's own
+`scripts/prereqs/` installs the cluster-side pieces, and
+[docs/prerequisites.md](docs/prerequisites.md) covers them in full: the
+OpenShift-managed Istio path, upstream Istio via `istioctl` on Kubernetes, and
+the operator's published Helm chart. None of it runs as part of a measurement.
+
+Other routes, if you prefer them: the [Sail
+Operator](https://github.com/istio-ecosystem/sail-operator) for Istio on
+non-managed clusters, or the operator's own
 [DEVELOPMENT.md](https://github.com/networking-incubator/coraza-kubernetes-operator/blob/main/DEVELOPMENT.md)
-covers the cluster prerequisites.
+for a build-from-source install.
 
 ---
 
@@ -395,6 +413,17 @@ bypasses the cache entirely.
 ---
 
 ## Running tests
+
+### Install the prerequisites
+
+```bash
+scripts/prereqs/check.sh         # Gateway API, Istio, WasmPlugin CRD, operator
+scripts/prereqs/install-all.sh   # install whatever check.sh reported missing
+```
+
+One-time per cluster, and deliberately outside `setup.sh`: installing Istio
+restarts the gateway proxy, so it must not happen inside a session.
+[docs/prerequisites.md](docs/prerequisites.md) has the per-platform detail.
 
 ### Provision the target
 
@@ -884,6 +913,12 @@ waf-perf-test/
 ├── analyze-results.py            # data analysis helper
 ├── requirements.txt              # Python deps for the report generators
 ├── scripts/
+│   ├── prereqs/                  # one-time cluster install: Istio, CRDs, operator
+│   │   ├── check.sh              # verify prerequisites, fail fast
+│   │   ├── install-all.sh        # all of the below, in order, then check
+│   │   ├── install-gateway-api.sh
+│   │   ├── install-istio.sh
+│   │   └── install-operator.sh
 │   ├── setup.sh                  # provision namespace, backend, loadgen, gateway
 │   ├── waf.sh                    # on <ruleset> | off | status
 │   ├── run.sh                    # one measured run with validity probes
@@ -906,7 +941,9 @@ waf-perf-test/
 │   └── sample-results/           # report-generator fixture (another cluster)
 ├── .claude/
 │   └── skills/perf-test/         # agent skill for driving this harness
-├── docs/plans/                   # planning artifacts
+├── docs/
+│   ├── prerequisites.md          # cluster prerequisites and their installers
+│   └── plans/                    # planning artifacts
 └── results/                      # raw JSON, summaries, generated HTML (ignored)
 ```
 
