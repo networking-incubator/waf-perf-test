@@ -63,10 +63,11 @@ For a guided run, the bundled skill at `.claude/skills/perf-test/SKILL.md` carri
 ## Prerequisites
 
 A measurement run installs nothing. The cluster-side pieces are installed once,
-beforehand, by `scripts/prereqs/` — never from `setup.sh` or during a session,
-because installing Istio restarts the gateway proxy and breaks the
-same-session baseline. `scripts/prereqs/check.sh` reports what is missing;
-`docs/prerequisites.md` explains each piece.
+beforehand, by `scripts/prereqs/install-all.sh` — never from `setup.sh` or
+during a session, because installing Istio restarts the gateway proxy and
+breaks the same-session baseline. That script is the default route and takes
+no arguments; `scripts/prereqs/check.sh` reports what is missing;
+`docs/prerequisites.md` explains each piece and its manual equivalent.
 
 - A Kubernetes v1.32+ or OpenShift v4.20+ cluster with Istio and the Gateway API CRDs.
   On OpenShift, Istio is installed by the cluster ingress operator in response to a
@@ -75,8 +76,10 @@ same-session baseline. `scripts/prereqs/check.sh` reports what is missing;
   `CORAZA_CHART_VERSION` for anything reportable.
 - Local tools: `kubectl` or `oc`, `envsubst`, `python3`, `curl`; plus `helm` and,
   on Kubernetes, `istioctl` for the prereq scripts.
-- `PLATFORM=openshift` exported on OpenShift. It drives both the CLI and the
-  gateway class, and nothing downstream works if it is wrong.
+- `PLATFORM` is detected from the cluster when unset, and drives both the CLI and
+  the gateway class. Set it only to override a correct detection; an override that
+  disagrees with the cluster warns rather than fails, since doing it deliberately
+  is legitimate.
 - For metrics collection, a reachable Prometheus with the operator's ServiceMonitor and PodMonitor enabled.
 - Dedicated node pools and guaranteed QoS for the load generator, Gateway, and backend. Without them you are measuring CPU throttling.
 
@@ -86,7 +89,7 @@ Carried over from the harness's previous home and deliberately not fixed, so the
 
 - **Every generated report claims the author's cluster.** `generate-report.py` and `templates/report-template.html` hardcode OpenShift 4.22.18, Istio v1.27.5, operator v0.5.0 and Fortio 1.76.0 as literals. Nothing reads them off the live cluster. Correct them by hand before circulating any report.
 - **The matrix is one repeat per cell.** `run-comprehensive-tests.sh` runs each combination once, which the methodology says is not reportable. Its output is indicative only.
-- **The load generator image is unpinned.** Both `lib.sh` and `manifests/loadgen.yaml` pull `fortio/fortio:latest`, so runs weeks apart may not share a load generator.
+- **The load generator image is unpinned.** `LOADGEN_IMAGE` still defaults to `fortio/fortio:latest`, so runs weeks apart may not share a load generator. The manifest no longer carries a second copy of the tag — it reads the variable — so pinning it in one place is now enough.
 - **The scenario name is hardcoded twice.** `generate-report.py` and `analyze-results.py` each carry their own `fixed-500qps` glob.
 
 ## Conventions

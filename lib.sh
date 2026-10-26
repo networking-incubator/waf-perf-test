@@ -16,7 +16,23 @@ SCENARIOS_DIR="${PT_ROOT}/scenarios"
 RESULTS_DIR="${RESULTS_DIR:-${PT_ROOT}/results}"
 
 # --- platform / cluster -----------------------------------------------------
-PLATFORM="${PLATFORM:-kubernetes}"
+# Unset means "ask the cluster". PLATFORM decides both the CLI and the gateway
+# class, and defaulting it blindly to kubernetes on an OpenShift cluster aimed
+# setup.sh at a GatewayClass that does not exist there — which surfaced as a
+# hang on the Gateway readiness wait, not an error. Set it explicitly to
+# override (e.g. PLATFORM=kubernetes on OpenShift when Istio was installed by
+# hand rather than by the cluster ingress operator).
+PLATFORM_DETECTED=false
+if [[ -z "${PLATFORM:-}" ]]; then
+  _probe="$(command -v oc || command -v kubectl || true)"
+  if [[ -n "${_probe}" ]] && \
+     "${_probe}" api-resources --api-group=route.openshift.io 2>/dev/null | grep -q "routes"; then
+    PLATFORM=openshift
+  fi
+  PLATFORM="${PLATFORM:-kubernetes}"
+  PLATFORM_DETECTED=true
+  unset _probe
+fi
 case "${PLATFORM}" in
   kubernetes|k8s) PLATFORM="kubernetes"; CLI="${CLI:-kubectl}"; GATEWAY_CLASS="${GATEWAY_CLASS:-istio}";;
   openshift|ocp)  PLATFORM="openshift";  CLI="${CLI:-oc}";      GATEWAY_CLASS="${GATEWAY_CLASS:-openshift-default}";;
@@ -33,6 +49,21 @@ TARGET_URL="${TARGET_URL:-http://${GATEWAY_SVC}.${NAMESPACE}.svc.cluster.local:8
 # Load generator (fortio: open-model, HDR histograms -> no coordinated omission).
 LOADGEN_IMAGE="${LOADGEN_IMAGE:-fortio/fortio:latest}"
 LOADGEN_NAME="${LOADGEN_NAME:-loadgen}"
+
+# Pod sizing. The defaults deliberately over-provision: the backend must never
+# be the bottleneck, or the number describes the backend and not the WAF.
+# Lower them only to exercise the harness on a cluster that cannot fit the
+# defaults (CRC, kind). Any run made with reduced sizing is a smoke test, not a
+# measurement — it is the throttling these values exist to avoid.
+BACKEND_REPLICAS="${BACKEND_REPLICAS:-3}"
+BACKEND_CPU_REQUEST="${BACKEND_CPU_REQUEST:-1}"
+BACKEND_CPU_LIMIT="${BACKEND_CPU_LIMIT:-2}"
+BACKEND_MEM_REQUEST="${BACKEND_MEM_REQUEST:-256Mi}"
+BACKEND_MEM_LIMIT="${BACKEND_MEM_LIMIT:-512Mi}"
+LOADGEN_CPU_REQUEST="${LOADGEN_CPU_REQUEST:-2}"
+LOADGEN_CPU_LIMIT="${LOADGEN_CPU_LIMIT:-4}"
+LOADGEN_MEM_REQUEST="${LOADGEN_MEM_REQUEST:-512Mi}"
+LOADGEN_MEM_LIMIT="${LOADGEN_MEM_LIMIT:-1Gi}"
 
 # WAF resource names.
 ENGINE_NAME="${ENGINE_NAME:-perf-engine}"
@@ -76,6 +107,13 @@ CORAZA_CHART="${CORAZA_CHART:-coraza-kubernetes-operator/coraza-kubernetes-opera
 CORAZA_CHART_VERSION="${CORAZA_CHART_VERSION:-}"
 CORAZA_NAMESPACE="${CORAZA_NAMESPACE:-coraza-system}"
 CORAZA_RELEASE="${CORAZA_RELEASE:-coraza-kubernetes-operator}"
+# Operator image. Empty means "whatever the chart defaults to", which is the
+# published ghcr.io image — and that is published for linux/amd64 only. On an
+# arm64 cluster (CRC on Apple Silicon) the pod fails with "no image found in
+# image index for architecture arm64"; build the operator for your arch and
+# point these at it. See docs/prerequisites.md.
+CORAZA_IMAGE_REPO="${CORAZA_IMAGE_REPO:-}"
+CORAZA_IMAGE_TAG="${CORAZA_IMAGE_TAG:-}"
 
 # --- logging ----------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -100,15 +138,18 @@ cluster_is_openshift() {
   "${CLI}" api-resources --api-group=route.openshift.io 2>/dev/null | grep -q "routes"
 }
 
-# PLATFORM drives GATEWAY_CLASS and CLI, so guessing it wrong sends every later
-# script at a gateway class that does not exist. Fail here instead.
+# Only an explicitly set PLATFORM can disagree with the cluster; a detected one
+# came from the cluster in the first place. Warn rather than fail: overriding
+# is legitimate (hand-installed Istio on OpenShift), getting it wrong by
+# accident is not, and the two look identical from here.
 require_platform_match() {
+  "${PLATFORM_DETECTED}" && return 0
   if cluster_is_openshift && [[ "${PLATFORM}" != "openshift" ]]; then
-    err "cluster is OpenShift but PLATFORM='${PLATFORM}'. Run: export PLATFORM=openshift"
-    exit 1
+    warn "PLATFORM='${PLATFORM}' but the cluster is OpenShift — expecting GatewayClass '${GATEWAY_CLASS}'."
+    warn "Unset PLATFORM to let it be detected, unless you installed Istio yourself."
   fi
   if ! cluster_is_openshift && [[ "${PLATFORM}" == "openshift" ]]; then
-    err "PLATFORM=openshift but the cluster has no route.openshift.io API. Unset PLATFORM."
+    err "PLATFORM=openshift but the cluster has no route.openshift.io API."
     exit 1
   fi
 }

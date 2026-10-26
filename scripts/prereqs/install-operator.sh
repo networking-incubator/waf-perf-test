@@ -29,11 +29,39 @@ log "Adding chart repo ${CORAZA_CHART_REPO}"
 helm repo add "${CORAZA_CHART_REPO_NAME}" "${CORAZA_CHART_REPO}" --force-update
 helm repo update "${CORAZA_CHART_REPO_NAME}"
 
+# An install interrupted partway (Ctrl-C, a pod that never schedules, a killed
+# CI step) leaves the release wedged in pending-install, and every later
+# attempt fails with "another operation is in progress" instead of recovering.
+# Clear it here rather than making the caller work that out.
+release_status="$(helm status "${CORAZA_RELEASE}" -n "${CORAZA_NAMESPACE}" \
+  -o json 2>/dev/null | python3 -c 'import json,sys
+try: print(json.load(sys.stdin)["info"]["status"])
+except Exception: pass' 2>/dev/null || true)"
+if [[ "${release_status}" == pending-* ]]; then
+  warn "previous attempt left release '${CORAZA_RELEASE}' in '${release_status}'; removing it first"
+  helm uninstall "${CORAZA_RELEASE}" -n "${CORAZA_NAMESPACE}" >/dev/null 2>&1 || true
+fi
+
 args=(upgrade --install "${CORAZA_RELEASE}" "${CORAZA_CHART}"
       --namespace "${CORAZA_NAMESPACE}" --create-namespace
       --wait --timeout 10m)
 
 [[ -n "${CORAZA_CHART_VERSION}" ]] && args+=(--version "${CORAZA_CHART_VERSION}")
+
+# Override the image when the published one cannot run here — the release is
+# linux/amd64 only, so an arm64 cluster needs a locally built one.
+[[ -n "${CORAZA_IMAGE_REPO}" ]] && args+=(--set "image.repository=${CORAZA_IMAGE_REPO}")
+[[ -n "${CORAZA_IMAGE_TAG}"  ]] && args+=(--set "image.tag=${CORAZA_IMAGE_TAG}")
+
+# A cluster whose nodes are not amd64 cannot pull the published image at all.
+# Catch it before a ten-minute --wait ends in ImagePullBackOff.
+node_arch="$("${CLI}" get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}' 2>/dev/null || true)"
+if [[ "${node_arch}" != "amd64" && -z "${CORAZA_IMAGE_REPO}" ]]; then
+  err "cluster nodes are '${node_arch}' but the published operator image is linux/amd64 only."
+  err "Build the operator for ${node_arch} and set CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG."
+  err "See 'Architectures' in docs/prerequisites.md."
+  exit 1
+fi
 
 if cluster_is_openshift; then
   # openshift.enabled drops runAsUser/fsGroup so the SCC can assign its own UID.
@@ -55,10 +83,38 @@ fi
 log "Installing ${CORAZA_CHART} into '${CORAZA_NAMESPACE}'"
 helm "${args[@]}"
 
-installed="$(helm list -n "${CORAZA_NAMESPACE}" -f "^${CORAZA_RELEASE}\$" \
-  -o json 2>/dev/null | python3 -c 'import json,sys
-r=json.load(sys.stdin)
-print(f"chart {r[0][\"chart\"]}, app {r[0][\"app_version\"]}" if r else "unknown")' 2>/dev/null || echo unknown)"
+# Helm installs the chart's crds/ on first install and NEVER touches them on
+# upgrade. Upgrading the chart, or switching to a locally built operator, then
+# leaves new code running against old CRDs. That failed here as RuleSource
+# status patches returning "not found", because the older CRD had no status
+# subresource — an error that names the object, not the schema, and sends you
+# looking in the wrong place. Applying them is idempotent; do it every time.
+if [[ -d "${CORAZA_CHART}/crds" ]]; then
+  log "Applying the chart's CRDs (helm skips these on upgrade)"
+  "${CLI}" apply -f "${CORAZA_CHART}/crds/" >/dev/null
+else
+  chart_crds="$(mktemp -d)"
+  if helm pull "${CORAZA_CHART}" ${CORAZA_CHART_VERSION:+--version "${CORAZA_CHART_VERSION}"} \
+       --untar --untardir "${chart_crds}" >/dev/null 2>&1 \
+     && compgen -G "${chart_crds}"/*/crds/*.yaml >/dev/null; then
+    log "Applying the chart's CRDs (helm skips these on upgrade)"
+    "${CLI}" apply -f "${chart_crds}"/*/crds/ >/dev/null
+  else
+    warn "could not fetch the chart's CRDs to reapply them; upgrades may leave them stale"
+  fi
+  rm -rf "${chart_crds}"
+fi
+
+# No f-string: backslash escapes inside an f-string expression are a syntax
+# error before Python 3.12, and this silently printed "unknown" because of it.
+installed="$(helm list -n "${CORAZA_NAMESPACE}" -o json 2>/dev/null | python3 -c '
+import json, sys
+for r in json.load(sys.stdin):
+    if r.get("name") == sys.argv[1]:
+        print("chart %s, app %s" % (r.get("chart"), r.get("app_version")))
+        break
+else:
+    print("unknown")' "${CORAZA_RELEASE}" 2>/dev/null || echo unknown)"
 
 ok "Coraza operator installed (${installed})."
 warn "Record that version in any report — the chart version is part of what the number describes."

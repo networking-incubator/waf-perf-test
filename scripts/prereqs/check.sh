@@ -27,7 +27,7 @@ check() {
   fi
 }
 
-log "Platform: ${PLATFORM} (CLI '${CLI}', gateway class '${GATEWAY_CLASS}')"
+log "Platform: ${PLATFORM} ($("${PLATFORM_DETECTED}" && echo detected || echo "from PLATFORM"), CLI '${CLI}', gateway class '${GATEWAY_CLASS}')"
 require_platform_match
 
 check "Gateway API CRDs" \

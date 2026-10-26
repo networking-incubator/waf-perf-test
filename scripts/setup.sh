@@ -17,9 +17,17 @@ log "Building payload ConfigMap '${PAYLOADS_CONFIGMAP}' for the load profiles"
 "${CLI}" create configmap "${PAYLOADS_CONFIGMAP}" -n "${NAMESPACE}" \
   --from-file="${PAYLOADS_DIR}" --dry-run=client -o yaml | "${CLI}" apply -f -
 
-log "Deploying backend (echo) and load generator (fortio)"
-"${CLI}" apply -n "${NAMESPACE}" -f "${MANIFESTS_DIR}/backend.yaml"
-"${CLI}" apply -n "${NAMESPACE}" -f "${MANIFESTS_DIR}/loadgen.yaml"
+log "Deploying backend (echo x${BACKEND_REPLICAS}) and load generator (fortio)"
+# Sizing comes from lib.sh so a small cluster can run the harness at all; the
+# defaults are the over-provisioned values a real measurement needs.
+BACKEND_REPLICAS="${BACKEND_REPLICAS}" \
+  BACKEND_CPU_REQUEST="${BACKEND_CPU_REQUEST}" BACKEND_CPU_LIMIT="${BACKEND_CPU_LIMIT}" \
+  BACKEND_MEM_REQUEST="${BACKEND_MEM_REQUEST}" BACKEND_MEM_LIMIT="${BACKEND_MEM_LIMIT}" \
+  envsubst < "${MANIFESTS_DIR}/backend.yaml" | "${CLI}" apply -n "${NAMESPACE}" -f -
+LOADGEN_IMAGE="${LOADGEN_IMAGE}" \
+  LOADGEN_CPU_REQUEST="${LOADGEN_CPU_REQUEST}" LOADGEN_CPU_LIMIT="${LOADGEN_CPU_LIMIT}" \
+  LOADGEN_MEM_REQUEST="${LOADGEN_MEM_REQUEST}" LOADGEN_MEM_LIMIT="${LOADGEN_MEM_LIMIT}" \
+  envsubst < "${MANIFESTS_DIR}/loadgen.yaml" | "${CLI}" apply -n "${NAMESPACE}" -f -
 
 log "Deploying Gateway '${GATEWAY_NAME}' (class '${GATEWAY_CLASS}') and HTTPRoute"
 GATEWAY_NAME="${GATEWAY_NAME}" GATEWAY_CLASS="${GATEWAY_CLASS}" \
@@ -31,7 +39,17 @@ log "Waiting for workloads and Gateway to be ready"
 "${CLI}" wait -n "${NAMESPACE}" "gateway/${GATEWAY_NAME}" --for=condition=Programmed --timeout="${WAIT_TIMEOUT}"
 
 log "Smoke test: load generator -> gateway"
-if loadgen_exec fortio curl -quiet "${TARGET_URL}/" >/dev/null 2>&1; then
+# Retry: Programmed=True means the controller accepted the Gateway, not that
+# the proxy is already serving the route. A single attempt here reported a
+# failure for a target that worked seconds later.
+smoke_ok=false
+for _ in 1 2 3 4 5; do
+  if loadgen_exec fortio curl -quiet "${TARGET_URL}/" >/dev/null 2>&1; then
+    smoke_ok=true; break
+  fi
+  sleep 3
+done
+if "${smoke_ok}"; then
   ok "Load generator can reach the gateway."
 else
   warn "Smoke test failed; check '${CLI} get gateway,httproute,pods -n ${NAMESPACE}'"

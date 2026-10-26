@@ -41,15 +41,17 @@ shows up as a hang on the Gateway readiness wait rather than an error, so
 check first:
 
 ```bash
-export PLATFORM=openshift        # omit on vanilla Kubernetes; drives CLI and gateway class
 scripts/prereqs/check.sh         # what is missing
 scripts/prereqs/install-all.sh   # install it (one-time; safe to re-run)
 ```
 
-Full detail, the manual equivalents, and why OpenShift installs Istio
-differently: [docs/prerequisites.md](docs/prerequisites.md). Run this before
-the session you intend to report — never between a baseline and a WAF-on run,
-since installing Istio restarts the gateway proxy.
+Nothing to set first — the platform is detected, and each script takes the
+route that platform expects. What that means per platform:
+[Environment requirements](#environment-requirements); the manual equivalents:
+[docs/prerequisites.md](docs/prerequisites.md).
+
+Run this before the session you intend to report — never between a baseline
+and a WAF-on run, since installing Istio restarts the gateway proxy.
 
 ### 2. Run the perf test
 
@@ -257,17 +259,45 @@ requires the operator's cache prerequisites.
 
 ### Environment requirements
 
-- Kubernetes **v1.32+** or OpenShift **v4.20+**, with Istio and the Gateway API CRDs
-- Operator already installed — **this harness does not install it**
-- Local tools: `kubectl` (or `oc`), `envsubst`, `python3`, `curl`
+**The default way to meet them:**
+
+```bash
+scripts/prereqs/install-all.sh
+```
+
+One command, nothing to set first. It detects the platform, installs what is
+missing, and verifies the result. Re-running it is a no-op for anything
+already present. Use this unless you have a reason not to.
+
+What it decides for you, and why those are the opinions:
+
+| Piece | Kubernetes | OpenShift |
+|---|---|---|
+| Gateway API CRDs | installs `GATEWAY_API_VERSION` (v1.4.1) | ships with the cluster; left alone |
+| Istio | `istioctl`, **minimal** profile — demo adds telemetry addons that compete for CPU with the proxy under test | a GatewayClass on `openshift.io/gateway-controller/v1`, so the **cluster ingress operator** installs OSSM at the version it pins. A hand-installed control plane there is not the one the gateway follows |
+| GatewayClass | `istio` | `openshift-default` |
+| Operator | published Helm chart, newest in the index | same, plus `openshift.enabled` and the `openshift-gateway` revision |
+
+Pin `CORAZA_CHART_VERSION` for anything you intend to report — unpinned, two
+runs a week apart may not share an operator. Every other knob has a default in
+`lib.sh`.
+
+**What it cannot do for you:**
+
 - **Dedicated node pools** for load generator, Gateway, and backend
 - **CPU requests = limits** (guaranteed QoS) to avoid throttling
+- Kubernetes **v1.32+** or OpenShift **v4.20+** in the first place
+- Local tools: `kubectl` (or `oc`), `envsubst`, `python3`, `curl`; plus `helm`,
+  and `istioctl` on Kubernetes
 - Optional: Prometheus with retention ≥1h at ≤15s scrape interval
 
-`scripts/prereqs/` installs the cluster-side pieces, and
-[docs/prerequisites.md](docs/prerequisites.md) covers them in full: the
-OpenShift-managed Istio path, upstream Istio via `istioctl` on Kubernetes, and
-the operator's published Helm chart. None of it runs as part of a measurement.
+Without the first two you are measuring CPU throttling, and no script can tell.
+
+`scripts/prereqs/check.sh` reports what is still missing.
+[docs/prerequisites.md](docs/prerequisites.md) has the per-platform detail and
+the manual equivalent of every step, for clusters where you would rather do it
+by hand. None of it runs as part of a measurement: installing Istio restarts
+the gateway proxy, so it must happen before the session, never inside one.
 
 Other routes, if you prefer them: the [Sail
 Operator](https://github.com/istio-ecosystem/sail-operator) for Istio on
@@ -819,11 +849,12 @@ initialize it in the template.
   Istio (line 924) and the platform (lines 884 and 920). Nothing reads those
   facts off the cluster, so a generated report asserts them whatever you
   actually ran against. Correct them by hand before circulating a number.
-- **The fortio image is unpinned.** `manifests/loadgen.yaml` and `lib.sh` both
-  pull `fortio/fortio:latest`, which sits badly with the Fortio v1.76+ line in
-  [Dependencies](#dependencies) — two sessions weeks apart may not have measured
-  with the same load generator. Set `LOADGEN_IMAGE` to a tagged release if the
-  runs have to be comparable over time.
+- **The fortio image is unpinned.** The default is still `fortio/fortio:latest`,
+  which sits badly with the Fortio v1.76+ line in [Dependencies](#dependencies)
+  — two sessions weeks apart may not have measured with the same load
+  generator. `manifests/loadgen.yaml` now reads `LOADGEN_IMAGE` rather than
+  carrying its own copy of the tag, so setting that one variable to a tagged
+  release is enough to make runs comparable over time.
 
 ---
 

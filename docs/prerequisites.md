@@ -5,13 +5,13 @@ it. Everything here is a **one-time cluster change**, not part of a run — see
 [When not to run these](#when-not-to-run-these).
 
 ```bash
-export PLATFORM=openshift          # omit on vanilla Kubernetes
 scripts/prereqs/check.sh           # what is missing, in about two seconds
 scripts/prereqs/install-all.sh     # install it, then re-check
 ```
 
-`install-all.sh` is re-runnable: each step is a no-op when its piece is already
-there.
+`install-all.sh` is the default route and needs no arguments or environment:
+it detects the platform and takes the path that platform expects. It is
+re-runnable — each step is a no-op when its piece is already there.
 
 ---
 
@@ -31,18 +31,25 @@ missing prerequisite presents as a hang, not an error. Run `check.sh` first.
 
 ---
 
-## Set PLATFORM first
+## PLATFORM, and when to set it
 
 `lib.sh` derives both the CLI and the gateway class from it:
 
 | `PLATFORM` | CLI | `GATEWAY_CLASS` |
 |---|---|---|
-| `kubernetes` (default) | `kubectl` | `istio` |
+| `kubernetes` | `kubectl` | `istio` |
 | `openshift` | `oc` | `openshift-default` |
 
-Every script, not just these, needs it. Getting it wrong points `setup.sh` at a
-gateway class that does not exist, so the prereq scripts refuse to run when the
-value disagrees with the cluster.
+Leave it unset and it is detected, by asking the cluster for the
+`route.openshift.io` API — every script does this, not just the prereq ones.
+Each prints which platform it is using and whether that was detected or taken
+from the variable.
+
+Set it only to override a correct detection, which in practice means one case:
+Istio installed by hand on OpenShift rather than by the ingress operator, where
+the gateway class is `istio` on an OpenShift cluster. Overriding earns a
+warning, since an accidental override and a deliberate one look identical from
+inside a script.
 
 ---
 
@@ -143,6 +150,37 @@ apart may not share an operator.
 
 To test operator changes you have not released, use `make deploy` from the
 operator repo instead and skip this script.
+
+### Architectures
+
+**The published operator image is `linux/amd64` only.** On an arm64 cluster —
+CRC on Apple Silicon, say — the pod never starts:
+
+```
+no image found in image index for architecture "arm64", variant "v8", OS "linux"
+```
+
+`install-operator.sh` checks the node architecture and stops before the ten
+minute `--wait` rather than letting it end in `ImagePullBackOff`. Build the
+operator for your architecture from its repo and point the harness at it:
+
+```bash
+cd <coraza-kubernetes-operator>
+docker build --platform linux/arm64 -t localhost/coraza-kubernetes-operator:dev .
+
+# CRC has no registry you can push to by default; load into the VM's
+# container storage, which CRI-O shares with podman:
+docker save localhost/coraza-kubernetes-operator:dev -o /tmp/op.tar
+scp -i ~/.crc/machines/crc/id_ed25519 -P 2222 /tmp/op.tar core@127.0.0.1:/tmp/
+ssh -i ~/.crc/machines/crc/id_ed25519 -p 2222 core@127.0.0.1 'sudo podman load -i /tmp/op.tar'
+
+CORAZA_IMAGE_REPO=localhost/coraza-kubernetes-operator CORAZA_IMAGE_TAG=dev \
+  scripts/prereqs/install-operator.sh
+```
+
+The `localhost/` prefix matters: it tells CRI-O the image is already in local
+storage, and the chart's default `pullPolicy: IfNotPresent` then leaves it
+alone.
 
 ---
 

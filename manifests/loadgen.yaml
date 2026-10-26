@@ -34,18 +34,18 @@ spec:
       #   perf.coraza.io/pool: loadgen
       containers:
         - name: fortio
-          image: fortio/fortio:latest
+          image: ${LOADGEN_IMAGE}
           args: ["server"]
           ports:
             - containerPort: 8080  # fortio UI/echo
             - containerPort: 8079  # fortio grpc
           resources:
             requests:
-              cpu: "2"
-              memory: 512Mi
+              cpu: "${LOADGEN_CPU_REQUEST}"
+              memory: ${LOADGEN_MEM_REQUEST}
             limits:
-              cpu: "4"
-              memory: 1Gi
+              cpu: "${LOADGEN_CPU_LIMIT}"
+              memory: ${LOADGEN_MEM_LIMIT}
           volumeMounts:
             - name: payloads
               mountPath: /payloads
