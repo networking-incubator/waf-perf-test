@@ -14,6 +14,10 @@
 #   POLL_CACHE=true                  Enable cache polling (ruleSetCacheServer);
 #                                    default is static-embedded rules.
 #   POLL_INTERVAL_SECONDS=15         Poll cadence when POLL_CACHE=true.
+#   WASM_WAIT_TIMEOUT=60             Seconds 'off' waits for the WasmPlugin to
+#                                    be withdrawn; it exits non-zero if it is
+#                                    still attached, so no caller measures a
+#                                    baseline through a live WAF filter.
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -76,8 +80,33 @@ case "${cmd}" in
   off)
     log "Removing Engine '${ENGINE_NAME}' (WAF off / baseline)"
     "${CLI}" delete -n "${NAMESPACE}" engine "${ENGINE_NAME}" --ignore-not-found
-    warn "Allow the WasmPlugin to be removed from Envoy before measuring baseline."
-    ok "WAF disabled."
+    # The delete returns when the API server accepts it, not when the filter is
+    # gone. This used to print an unconditional reminder to wait; waiting for
+    # the WasmPlugin to actually disappear is both quieter when it works and a
+    # real gate when it doesn't, because the failure it guards against — a
+    # baseline measured with the filter still attached — produces a plausible
+    # number rather than an error.
+    log "Waiting up to ${WASM_WAIT_TIMEOUT}s for the WasmPlugin to be withdrawn"
+    rc=0; wait_wasmplugin_absent "${WASM_WAIT_TIMEOUT}" || rc=$?
+    case "${rc}" in
+      0)
+        ok "WasmPlugin withdrawn from namespace '${NAMESPACE}'."
+        ok "WAF disabled."
+        ;;
+      2)
+        err "Cannot list WasmPlugins in '${NAMESPACE}' — the WAF state is unknown."
+        err "Refusing to report the WAF off: a baseline measured now may include WAF cost."
+        exit 1
+        ;;
+      *)
+        still="$(wasmplugin_names || true)"
+        err "WasmPlugin still attached after ${WASM_WAIT_TIMEOUT}s: ${still%" "}"
+        err "Envoy is likely still running the WAF filter, so a baseline measured now would"
+        err "include its cost and understate every delta computed against it."
+        err "Check the operator: ${CLI} get engine,wasmplugin -n ${NAMESPACE}"
+        exit 1
+        ;;
+    esac
     ;;
   status)
     "${CLI}" get -n "${NAMESPACE}" engine,ruleset,rulesource 2>/dev/null || true

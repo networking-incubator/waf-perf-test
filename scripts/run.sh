@@ -10,6 +10,8 @@
 #
 # Environment knobs:
 #   EXPECT_BLOCK=true|false  Assert the attack probe is/ isn't blocked (403).
+#   EXPECT_WASM=true|false   Assert a WasmPlugin is/ isn't attached before
+#                            measuring; aborts on mismatch.
 #   WARMUP=10s               Warm-up load discarded before the measured run.
 #
 set -euo pipefail
@@ -102,6 +104,39 @@ if [[ -n "${PAYLOAD_FILE}" ]]; then
     err "Build it with: manifests/load-profiles/gen-payloads.sh && scripts/setup.sh"
     exit 1
   fi
+fi
+
+# --- WASM filter gate -------------------------------------------------------
+# EXPECT_WASM asserts the control-plane state of the filter, which the HTTP
+# probes below cannot see: a filter attached but not blocking answers 200 to
+# the attack probe while still costing whatever it costs. suite.sh sets
+# 'false' on the baseline leg, where a WasmPlugin left attached would put WAF
+# cost inside the one number every later delta is subtracted from.
+if [[ -n "${EXPECT_WASM:-}" ]]; then
+  # Validated rather than mirrored from EXPECT_BLOCK's two-if shape: a typo
+  # there merely skips an optional assertion, but a typo here would silently
+  # disable the gate that keeps the baseline honest.
+  case "${EXPECT_WASM}" in
+    true|false) ;;
+    *) err "invalid EXPECT_WASM='${EXPECT_WASM}' (must be 'true' or 'false')"; exit 1;;
+  esac
+  if ! wasm_names="$(wasmplugin_names)"; then
+    err "cannot list WasmPlugins in '${NAMESPACE}' — WAF state unknown. Aborting."
+    exit 1
+  fi
+  wasm_names="${wasm_names%" "}"
+  if [[ "${EXPECT_WASM}" == "false" && -n "${wasm_names}" ]]; then
+    err "EXPECT_WASM=false but WasmPlugin(s) still attached: ${wasm_names}."
+    err "A baseline measured now would carry WAF cost and understate every delta"
+    err "computed against it. Run scripts/waf.sh off and let it confirm. Aborting."
+    exit 1
+  fi
+  if [[ "${EXPECT_WASM}" == "true" && -z "${wasm_names}" ]]; then
+    err "EXPECT_WASM=true but no WasmPlugin in '${NAMESPACE}' (filter never attached?)."
+    err "The run would measure a bypassed WAF. Aborting."
+    exit 1
+  fi
+  ok "WasmPlugin state matches EXPECT_WASM=${EXPECT_WASM}"
 fi
 
 # --- validity probe ---------------------------------------------------------

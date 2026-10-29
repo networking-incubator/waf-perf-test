@@ -8,6 +8,14 @@
 # Env: CORAZA_CHART_VERSION (pin it for a reportable run), CORAZA_NAMESPACE,
 #      CORAZA_RELEASE, CORAZA_CHART_REPO (defaults in lib.sh)
 #
+#      CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG override the chart's image — needed
+#      on arm64, where the chart's ghcr.io release is amd64-only.
+#      CORAZA_CRD_DIR must accompany them, pointing at the config/crd/bases of
+#      the revision that image was built from. The chart's CRDs are pinned to
+#      the chart; a newer operator needs fields they do not define, and the
+#      mismatch surfaces three steps later as a RuleSet that never goes Ready.
+#      See 'Architectures' in docs/prerequisites.md.
+#
 # This installs a release build. To test operator changes you have not shipped,
 # use 'make deploy' in the operator repo instead and skip this script.
 #
@@ -48,19 +56,63 @@ args=(upgrade --install "${CORAZA_RELEASE}" "${CORAZA_CHART}"
 
 [[ -n "${CORAZA_CHART_VERSION}" ]] && args+=(--version "${CORAZA_CHART_VERSION}")
 
-# Override the image when the published one cannot run here — the release is
-# linux/amd64 only, so an arm64 cluster needs a locally built one.
-[[ -n "${CORAZA_IMAGE_REPO}" ]] && args+=(--set "image.repository=${CORAZA_IMAGE_REPO}")
+# Override the image when the chart's own cannot run here — its ghcr.io
+# release is linux/amd64 only, so an arm64 cluster needs the multi-arch
+# Konflux build or one you built yourself.
+#
+# Tracked, because an image that is not the chart's is also the case where the
+# chart's CRDs are the wrong ones: the two ship together and only match when
+# both come from the same revision. Checked once below, after the fallback
+# that reuses an already-deployed image has had its say.
+custom_image=false
+[[ -n "${CORAZA_IMAGE_REPO}" ]] && { args+=(--set "image.repository=${CORAZA_IMAGE_REPO}"); custom_image=true; }
 [[ -n "${CORAZA_IMAGE_TAG}"  ]] && args+=(--set "image.tag=${CORAZA_IMAGE_TAG}")
 
-# A cluster whose nodes are not amd64 cannot pull the published image at all.
-# Catch it before a ten-minute --wait ends in ImagePullBackOff.
-node_arch="$("${CLI}" get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}' 2>/dev/null || true)"
-if [[ "${node_arch}" != "amd64" && -z "${CORAZA_IMAGE_REPO}" ]]; then
-  err "cluster nodes are '${node_arch}' but the published operator image is linux/amd64 only."
-  err "Build the operator for ${node_arch} and set CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG."
-  err "See 'Architectures' in docs/prerequisites.md."
-  exit 1
+# A cluster with no amd64 node cannot pull the published image at all. Catch
+# that before a ten-minute --wait ends in ImagePullBackOff.
+#
+# Every node, not just the first: a mixed-architecture cluster can schedule the
+# operator on an amd64 node, so one arm64 node is no reason to refuse. And
+# listing nodes is a cluster-scoped read that plenty of namespace-scoped
+# credentials do not have — when the list comes back empty we cannot tell
+# "no amd64 nodes" from "not allowed to look", so proceed rather than block on
+# a guess.
+node_arches="$("${CLI}" get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.architecture}{"\n"}{end}' 2>/dev/null | sort -u | tr '\n' ' ' || true)"
+if [[ -z "${node_arches// /}" ]]; then
+  warn "cannot read node architectures; skipping the image-architecture check"
+elif [[ " ${node_arches} " != *" amd64 "* && -z "${CORAZA_IMAGE_REPO}" ]]; then
+  node_arch="${node_arches% }"
+  # An image is already deployed here, so someone solved this before. Re-running
+  # the installer (or install-all.sh, which passes no overrides of its own)
+  # must not refuse to proceed on a cluster that is already working.
+  deployed_image="$("${CLI}" get deploy -n "${CORAZA_NAMESPACE}" \
+    -l app.kubernetes.io/name=coraza-kubernetes-operator \
+    -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>/dev/null || true)"
+  if [[ -n "${deployed_image}" && "${deployed_image##*/}" == *:* ]]; then
+    log "Keeping the operator image already deployed: ${deployed_image}"
+    args+=(--set "image.repository=${deployed_image%:*}" --set "image.tag=${deployed_image##*:}")
+    custom_image=true
+  else
+    err "cluster nodes are '${node_arch}' but the chart's ghcr.io release image is linux/amd64 only."
+    err "Pick an image that runs here and set CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG, plus"
+    err "CORAZA_CRD_DIR for the matching source revision. Either:"
+    err "  - a multi-arch build from ${CORAZA_IMAGE_ARM64_HINT}"
+    err "    (staging: commit-SHA tags, no 'latest', builds are garbage-collected), or"
+    err "  - one you build yourself."
+    err "See 'Architectures' in docs/prerequisites.md."
+    exit 1
+  fi
+fi
+
+# The pairing, stated once where both halves are known. Not fatal: a build
+# close enough to the chart works fine, and only you know which revision the
+# image came from. But this combination is what produces a WAF that installs
+# cleanly, reports Ready on nothing, and times out in waf.sh much later.
+if "${custom_image}" && [[ -z "${CORAZA_CRD_DIR}" ]]; then
+  warn "running an operator image that is not the chart's, against the chart's CRDs."
+  warn "Set CORAZA_CRD_DIR=<checkout>/config/crd/bases for the revision that image was"
+  warn "built from, or the RuleSet may never go Ready."
+  warn "See 'Architectures' in docs/prerequisites.md."
 fi
 
 if cluster_is_openshift; then
@@ -89,7 +141,21 @@ helm "${args[@]}"
 # status patches returning "not found", because the older CRD had no status
 # subresource — an error that names the object, not the schema, and sends you
 # looking in the wrong place. Applying them is idempotent; do it every time.
-if [[ -d "${CORAZA_CHART}/crds" ]]; then
+#
+# CORAZA_CRD_DIR overrides the source. Reapplying the chart's CRDs is only a
+# fix while the image is the chart's: against a locally built operator the
+# chart's copies are the stale ones, so this step was faithfully reinstalling
+# the very schema that broke it.
+if [[ -n "${CORAZA_CRD_DIR}" ]]; then
+  [[ -d "${CORAZA_CRD_DIR}" ]] || { err "CORAZA_CRD_DIR='${CORAZA_CRD_DIR}' is not a directory"; exit 1; }
+  compgen -G "${CORAZA_CRD_DIR}/*.yaml" >/dev/null \
+    || { err "no *.yaml in CORAZA_CRD_DIR='${CORAZA_CRD_DIR}'"; exit 1; }
+  log "Applying CRDs from CORAZA_CRD_DIR (overrides the chart's)"
+  # Server-side: these were first applied client-side by helm, so the existing
+  # objects carry a last-applied-configuration that field management conflicts
+  # with. --force-conflicts takes ownership rather than failing the install.
+  "${CLI}" apply --server-side --force-conflicts -f "${CORAZA_CRD_DIR}/" >/dev/null
+elif [[ -d "${CORAZA_CHART}/crds" ]]; then
   log "Applying the chart's CRDs (helm skips these on upgrade)"
   "${CLI}" apply -f "${CORAZA_CHART}/crds/" >/dev/null
 else
@@ -117,5 +183,17 @@ else:
     print("unknown")' "${CORAZA_RELEASE}" 2>/dev/null || echo unknown)"
 
 ok "Coraza operator installed (${installed})."
-warn "Record that version in any report — the chart version is part of what the number describes."
+
+# The chart renders the image as "{{ repository }}:{{ tag }}" and has no digest
+# field, so a @sha256: reference cannot be passed through CORAZA_IMAGE_TAG.
+# Read back what the node actually resolved instead: a commit-SHA tag in a
+# staging registry can be rebuilt or collected, and the digest is the only
+# thing that still identifies this binary afterwards.
+resolved="$("${CLI}" get pods -n "${CORAZA_NAMESPACE}" \
+  -l app.kubernetes.io/name=coraza-kubernetes-operator \
+  -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)"
+[[ -n "${resolved}" ]] && log "Running image: ${resolved}"
+
+warn "Record the chart version and that image digest in any report — both are part"
+warn "of what the number describes."
 log "Verify the whole stack: scripts/prereqs/check.sh"

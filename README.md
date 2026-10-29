@@ -50,6 +50,28 @@ route that platform expects. What that means per platform:
 [Environment requirements](#environment-requirements); the manual equivalents:
 [docs/prerequisites.md](docs/prerequisites.md).
 
+One exception. The chart's ghcr.io release image is `linux/amd64` only, so an
+arm64 cluster (CRC on Apple Silicon) needs a different image — either the
+multi-arch Konflux build or one you build yourself — and the CRDs that match
+it, in the same command:
+
+```bash
+CORAZA_IMAGE_REPO=quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator \
+CORAZA_IMAGE_TAG=<commit-sha> \
+CORAZA_CRD_DIR=<matching-checkout>/config/crd/bases \
+  scripts/prereqs/install-all.sh
+```
+
+Setting only the image leaves the chart's CRDs in place, and an operator newer
+than the chart then writes status to subresources that schema does not define.
+It installs cleanly, reports Ready on nothing, and `waf.sh on` times out on the
+RuleSet much later. `check.sh` catches it.
+
+That Konflux registry is staging — commit-SHA tags, no `latest`, builds get
+garbage-collected — so it is for getting a cluster working, not for a number
+you report. Both routes, and how to record which image actually ran:
+[Architectures](docs/prerequisites.md#architectures).
+
 Run this before the session you intend to report — never between a baseline
 and a WAF-on run, since installing Istio restarts the gateway proxy.
 
@@ -518,8 +540,13 @@ COLLECT=true LOAD_PROFILE=args-heavy scripts/suite.sh scenarios/fixed-500qps.env
 ### Tear down
 
 ```bash
-scripts/teardown.sh   # deletes the namespace; results/ is retained
+scripts/teardown.sh                      # deletes the namespace; results/ is retained
+scripts/prereqs/uninstall-operator.sh    # also removes the operator, its RBAC and CRDs
 ```
+
+`uninstall-operator.sh` leaves Istio and the GatewayClass in place — see
+[Uninstalling](docs/prerequisites.md#uninstalling) for why, and for the manual
+commands if you want them gone too.
 
 ---
 
@@ -543,7 +570,10 @@ by hand.
 5. **Settle after toggling.** After `waf.sh on|off`, wait for Istio to apply or
    remove the WasmPlugin — plus one poll interval (~15s) if the cache is
    enabled. `suite.sh` uses `SETTLE=25s`; `run-comprehensive-tests.sh` uses 30s.
-   Never measure inside the settle window.
+   Never measure inside the settle window. For the baseline this is enforced,
+   not advised: `waf.sh off` waits for the WasmPlugin to be withdrawn and exits
+   non-zero if it is still attached, and `run.sh` re-checks via `EXPECT_WASM`
+   before the load starts.
 6. **Confirm the WAF actually ran.** Every measured window must show non-zero
    `coraza_waf_requests_total` and the expected block counts. A bypassed filter
    makes the run invalid, not merely optimistic.
@@ -748,7 +778,11 @@ Environment variables; defaults in `lib.sh`.
 | `EXPECT_STATUS` | `200` | Status the shape probe must see |
 | `EXPECT_BLOCK` | unset | Assert the attack probe is (`true`) or isn't (`false`) blocked |
 | `EXPECT_BENIGN_STATUS` | unset | Assert the benign probe's status |
+| `EXPECT_WASM` | unset | Assert a WasmPlugin is (`true`) or isn't (`false`) attached; `suite.sh` sets `false` on the baseline |
 | `WAIT_TIMEOUT` | `180s` | Readiness wait timeout |
+| `WASM_WAIT_TIMEOUT` | `60` | Seconds `waf.sh off` waits for the WasmPlugin to be withdrawn |
+| `CORAZA_IMAGE_REPO` / `CORAZA_IMAGE_TAG` | chart default | Operator image; override for a locally built one |
+| `CORAZA_CRD_DIR` | chart's `crds/` | CRD source. Set it to `<operator-checkout>/config/crd/bases` whenever `CORAZA_IMAGE_REPO` is set — image and CRDs must come from the same revision |
 | `RESULTS_DIR` | `./results` | Where results are written |
 | `PROM_NAMESPACE` / `PROM_SVC` / `PROM_PORT` | `monitoring` / `prometheus-k8s` / `9090` | Prometheus location |
 
@@ -949,7 +983,8 @@ waf-perf-test/
 │   │   ├── install-all.sh        # all of the below, in order, then check
 │   │   ├── install-gateway-api.sh
 │   │   ├── install-istio.sh
-│   │   └── install-operator.sh
+│   │   ├── install-operator.sh
+│   │   └── uninstall-operator.sh
 │   ├── setup.sh                  # provision namespace, backend, loadgen, gateway
 │   ├── waf.sh                    # on <ruleset> | off | status
 │   ├── run.sh                    # one measured run with validity probes

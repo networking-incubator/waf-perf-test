@@ -55,6 +55,7 @@ Pick the mode from the user's request (or the `args`). Modes map to scripts:
 | `matrix-report` | **INDICATIVE ONLY** — rebuild the matrix HTML from `results/` | `python3 generate-report.py` (no cluster needed) |
 | `matrix-text` | Percentile / throughput / consistency tables for the matrix, printed to stdout | `python3 analyze-results.py` (no cluster needed) |
 | `teardown` | Delete the test namespace (results kept) | `scripts/teardown.sh` |
+| `uninstall` | Also remove the operator, its RBAC and CRDs | `scripts/prereqs/uninstall-operator.sh` |
 | `crs` | Generate an OWASP CoreRuleSet ruleset for a run | see **Larger rulesets** below |
 
 ### Why the matrix entry points are INDICATIVE ONLY
@@ -364,7 +365,10 @@ To also gather metrics during a suite: `COLLECT=true scripts/suite.sh …`.
 ## Gotchas
 
 - **Don't measure inside the settle window** — the WASM plugin polls every ~15s;
-  a fresh toggle isn't live yet.
+  a fresh toggle isn't live yet. On the baseline leg this is enforced:
+  `waf.sh off` waits out the WasmPlugin's withdrawal and fails if it is still
+  attached, and `run.sh` re-checks it (`EXPECT_WASM=false`). A failure there
+  means the operator never withdrew the filter — fix that, don't skip the gate.
 - **A `coraza_waf_plugin_loads_total` bump mid-window invalidates the run.**
 - **Request shape comes from the load profile, not from flags you invent.**
   `run.sh` already plumbs `METHOD`, `REQ_PATH`, `CONTENT_TYPE`, `PAYLOAD_FILE`,

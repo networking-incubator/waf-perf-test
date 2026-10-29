@@ -54,6 +54,20 @@ for crd in engines rulesets rulesources; do
     has_crd "${crd}.waf.k8s.coraza.io"
 done
 
+# Present is not the same as current. The operator writes status to RuleSource
+# and RuleData, and a CRD without that subresource rejects the patch as "not
+# found" — which surfaces three steps later as a RuleSet stuck on
+# AwaitingRuleSourceValidation and waf.sh timing out on the Ready wait. Cheap
+# to assert here, expensive to diagnose there.
+crd_has_status() {
+  [[ "$("${CLI}" get crd "$1" -o jsonpath='{.spec.versions[*].subresources.status}' 2>/dev/null)" != "" ]]
+}
+for crd in rulesources ruledata; do
+  check "CRD ${crd}.waf.k8s.coraza.io serves /status" \
+    "CRD is older than the operator — reapply with CORAZA_CRD_DIR=<checkout>/config/crd/bases" \
+    crd_has_status "${crd}.waf.k8s.coraza.io"
+done
+
 check "Coraza operator available in '${CORAZA_NAMESPACE}'" \
   "operator CRDs exist but no manager is running — ${CLI} get pods -n ${CORAZA_NAMESPACE}" \
   "${CLI}" wait --for=condition=Available deploy -l app.kubernetes.io/name=coraza-kubernetes-operator \
@@ -69,6 +83,11 @@ fi
 echo
 if (( missing > 0 )); then
   err "${missing} prerequisite(s) missing. Install them: scripts/prereqs/install-all.sh"
+  # Not every failure above is fixed by a plain re-install — a CRD older than
+  # the operator is reinstalled identically unless CORAZA_CRD_DIR says
+  # otherwise. Each check prints its own fix; say so rather than let the
+  # generic line send someone round the same loop.
+  err "Where a check named a different fix, prefer that one."
   err "Details and the manual equivalents: docs/prerequisites.md"
   exit 1
 fi

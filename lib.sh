@@ -75,6 +75,11 @@ PROM_SVC="${PROM_SVC:-prometheus-k8s}"
 PROM_PORT="${PROM_PORT:-9090}"
 
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-180s}"
+# How long waf.sh waits for the operator to withdraw the WasmPlugin after the
+# Engine is deleted. Separate from WAIT_TIMEOUT because this one gates a
+# measurement rather than a provisioning step: it should fail fast and loudly
+# rather than sit for three minutes.
+WASM_WAIT_TIMEOUT="${WASM_WAIT_TIMEOUT:-60}"
 
 # --- prerequisites (scripts/prereqs/ only) ----------------------------------
 # Read only by scripts/prereqs/*.sh. A measurement run never installs anything:
@@ -108,12 +113,41 @@ CORAZA_CHART_VERSION="${CORAZA_CHART_VERSION:-}"
 CORAZA_NAMESPACE="${CORAZA_NAMESPACE:-coraza-system}"
 CORAZA_RELEASE="${CORAZA_RELEASE:-coraza-kubernetes-operator}"
 # Operator image. Empty means "whatever the chart defaults to", which is the
-# published ghcr.io image — and that is published for linux/amd64 only. On an
-# arm64 cluster (CRC on Apple Silicon) the pod fails with "no image found in
-# image index for architecture arm64"; build the operator for your arch and
-# point these at it. See docs/prerequisites.md.
+# ghcr.io release image for the chart version.
+#
+# Those release images are linux/amd64 only — every tag through v0.5.0 is a
+# single-platform index — so on an arm64 cluster (CRC on Apple Silicon) the pod
+# fails with "no image found in image index for architecture arm64". Two ways
+# out, and both need CORAZA_CRD_DIR with them, because neither image is the
+# chart's any more:
+#
+#   - The Konflux stream below publishes linux/amd64 + linux/arm64. It is a
+#     staging registry: tags are commit SHAs, there is no 'latest', and builds
+#     are garbage-collected. Fine for getting a cluster working, not something
+#     to pin a reported number to.
+#   - Build the operator yourself. See docs/prerequisites.md, "Architectures".
+#
+# CORAZA_IMAGE_ARM64_HINT is only ever printed, never applied: which image you
+# run is a decision about what the number describes, so the script names the
+# option and leaves the choice.
 CORAZA_IMAGE_REPO="${CORAZA_IMAGE_REPO:-}"
 CORAZA_IMAGE_TAG="${CORAZA_IMAGE_TAG:-}"
+CORAZA_IMAGE_ARM64_HINT="${CORAZA_IMAGE_ARM64_HINT:-quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator}"
+# Where install-operator.sh reads the CRDs from. Empty means "the chart's own
+# crds/", which is right whenever the image is the chart's too.
+#
+# It is not right for a locally built image. The chart's CRDs are pinned to the
+# chart version, the image is not, and the pair has to match: a build newer
+# than the chart needs CRD fields the chart has never heard of. Published
+# chart 0.5.0 ships rulesources and ruledata with no status subresource, so an
+# operator built after that writes RuleSource status into an endpoint the API
+# server does not serve, and every patch comes back "not found" — naming the
+# object, not the schema. The RuleSet then waits on a validation that can never
+# arrive and waf.sh times out on 'oc wait ruleset --for=condition=Ready'.
+#
+# Point this at config/crd/bases in the same checkout the image was built from,
+# always alongside CORAZA_IMAGE_REPO. See docs/prerequisites.md.
+CORAZA_CRD_DIR="${CORAZA_CRD_DIR:-}"
 
 # --- logging ----------------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -155,6 +189,37 @@ require_platform_match() {
 }
 
 has_crd() { "${CLI}" get crd "$1" >/dev/null 2>&1; }
+
+# Space-separated names of the WasmPlugins in the test namespace, which is the
+# control-plane view of whether Envoy is running the WAF filter. The operator
+# applies one per Engine via SSA into the gateway's own namespace, and that
+# namespace belongs to this harness, so anything listed here is the WAF under
+# test. No CRD means Istio cannot load a WASM filter at all, so report none.
+# Deliberately no '|| true' on the query: a failed lookup must surface as a
+# non-zero exit ("cannot tell"), never as an empty list ("nothing attached").
+wasmplugin_names() {
+  has_crd wasmplugins.extensions.istio.io || return 0
+  "${CLI}" get wasmplugin -n "${NAMESPACE}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}'
+}
+
+# Block until no WasmPlugin is left in the namespace.
+#   0 = gone, 1 = still there at the deadline, 2 = could not tell.
+# Deleting the Engine only tells the operator to withdraw the filter: the
+# WasmPlugin outlives the Engine by however long reconciliation takes, and
+# Envoy keeps running the filter until istiod pushes the removal. A baseline
+# measured inside that gap folds WAF cost into the number every later delta is
+# subtracted from, which shrinks the reported overhead while looking valid.
+wait_wasmplugin_absent() {
+  local timeout="${1:-${WASM_WAIT_TIMEOUT}}" deadline names
+  deadline=$(( $(date +%s) + timeout ))
+  while :; do
+    names="$(wasmplugin_names)" || return 2
+    [[ -z "${names// /}" ]] && return 0
+    (( $(date +%s) >= deadline )) && return 1
+    sleep 2
+  done
+}
 
 # Exec a command in the load generator pod.
 loadgen_exec() {

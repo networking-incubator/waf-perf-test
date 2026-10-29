@@ -14,6 +14,9 @@
 # Env:
 #   COLLECT=true          Also pull Prometheus metrics around each run.
 #   SETTLE=25s            Wait after toggling the WAF for the WASM poll to apply.
+#   WASM_WAIT_TIMEOUT=60  Seconds waf.sh waits for the WasmPlugin to be
+#                         withdrawn before the baseline. The suite aborts
+#                         rather than measure a baseline through a live filter.
 #   A blocking load profile (EXPECT_STATUS=403) is validated automatically;
 #   the WAF-off baseline run forces EXPECT_STATUS=200.
 #
@@ -40,7 +43,12 @@ run_one() {
   # the old attack-* filename heuristic: it keys off actual WAF state, and the
   # profile already says what it expects when the WAF is on.
   if [[ "${baseline}" == "baseline" ]]; then
-    EXPECT_STATUS=200 ./scripts/run.sh "${SCENARIO_FILE}" "${tag}"
+    # EXPECT_WASM=false is the second half of the baseline gate. waf.sh off
+    # already refuses to return success while the filter is attached; this
+    # re-checks immediately before the load starts, so a WasmPlugin that
+    # reappeared during the settle window (an Engine recreated by hand, an
+    # operator retry) stops the run instead of contaminating the baseline.
+    EXPECT_STATUS=200 EXPECT_WASM=false ./scripts/run.sh "${SCENARIO_FILE}" "${tag}"
   else
     ./scripts/run.sh "${SCENARIO_FILE}" "${tag}"
   fi
@@ -52,8 +60,12 @@ run_one() {
 
 # --- 1. baseline: WAF off ---------------------------------------------------
 log "=== Baseline: WAF OFF ==="
+# waf.sh off exits non-zero if the WasmPlugin is still attached, so set -e
+# stops the suite here rather than letting it record a contaminated baseline.
 ./scripts/waf.sh off
-log "Settling ${SETTLE} for WasmPlugin removal"; sleep "${SETTLE%s}"
+# The WasmPlugin is already gone by this point; the wait is for Envoy to apply
+# the removal istiod pushed.
+log "Settling ${SETTLE} for Envoy to drop the filter"; sleep "${SETTLE%s}"
 run_one "waf-off" "baseline"
 
 # --- 2..N: WAF on per ruleset ----------------------------------------------

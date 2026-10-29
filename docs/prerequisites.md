@@ -153,16 +153,48 @@ operator repo instead and skip this script.
 
 ### Architectures
 
-**The published operator image is `linux/amd64` only.** On an arm64 cluster —
-CRC on Apple Silicon, say — the pod never starts:
+**The chart's ghcr.io release image is `linux/amd64` only.** Every tag through
+`v0.5.0` is a single-platform index, so on an arm64 cluster — CRC on Apple
+Silicon, say — the pod never starts:
 
 ```
 no image found in image index for architecture "arm64", variant "v8", OS "linux"
 ```
 
 `install-operator.sh` checks the node architecture and stops before the ten
-minute `--wait` rather than letting it end in `ImagePullBackOff`. Build the
-operator for your architecture from its repo and point the harness at it:
+minute `--wait` rather than letting it end in `ImagePullBackOff`.
+
+Two ways out. **Both need `CORAZA_CRD_DIR` set as well** — see the end of this
+section — because in both cases the image no longer comes from the same
+release as the chart.
+
+#### Option 1: the multi-arch Konflux build
+
+The Konflux pipeline publishes `linux/amd64` + `linux/arm64`:
+
+```bash
+CORAZA_IMAGE_REPO=quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator \
+CORAZA_IMAGE_TAG=<commit-sha> \
+CORAZA_CRD_DIR=<matching-checkout>/config/crd/bases \
+  scripts/prereqs/install-all.sh
+```
+
+The repository is public, so the cluster pulls it directly — no local build, no
+loading into the node. Know what you are taking on, though:
+
+- **It is a staging registry.** Tags are commit SHAs and `on-pr-<sha>` builds,
+  and they are garbage-collected. There is no `latest`; the registry returns
+  `MANIFEST_UNKNOWN` for it.
+- **It is a different source line.** At the time of writing its `vcs-ref` is
+  not a commit in `networking-incubator/coraza-kubernetes-operator`, and no
+  matching chart exists in the published Helm index.
+
+Good for getting an arm64 cluster working. Not something to pin a reported
+number to.
+
+#### Option 2: build it yourself
+
+Build for your architecture from the operator repo and point the harness at it:
 
 ```bash
 cd <coraza-kubernetes-operator>
@@ -175,12 +207,58 @@ scp -i ~/.crc/machines/crc/id_ed25519 -P 2222 /tmp/op.tar core@127.0.0.1:/tmp/
 ssh -i ~/.crc/machines/crc/id_ed25519 -p 2222 core@127.0.0.1 'sudo podman load -i /tmp/op.tar'
 
 CORAZA_IMAGE_REPO=localhost/coraza-kubernetes-operator CORAZA_IMAGE_TAG=dev \
+CORAZA_CRD_DIR=<coraza-kubernetes-operator>/config/crd/bases \
   scripts/prereqs/install-operator.sh
 ```
 
 The `localhost/` prefix matters: it tells CRI-O the image is already in local
 storage, and the chart's default `pullPolicy: IfNotPresent` then leaves it
-alone.
+alone. It only works on single-node CRC: with more than one node the image
+exists on whichever node you loaded it into and nowhere else, so the pod
+starts or hits `ImagePullBackOff` depending on where it schedules. On a real
+cluster, push to a registry it can reach.
+
+#### Recording which image ran
+
+The chart renders the image as `"{{ repository }}:{{ tag }}"` with no digest
+field, so a `@sha256:` reference cannot be passed through `CORAZA_IMAGE_TAG`.
+That matters most for Option 1, where a commit-SHA tag in a staging registry
+can be rebuilt or collected out from under you.
+
+`install-operator.sh` reads the resolved reference back off the running pod and
+prints it:
+
+```
+==> Running image: quay.io/…/waf-operator@sha256:163f2b10abf…
+```
+
+Record that digest alongside the chart version. It is the only thing that still
+identifies the binary once the tag is gone.
+
+#### Pair the CRDs with the image
+
+**Set `CORAZA_CRD_DIR` whenever you set `CORAZA_IMAGE_REPO`.** The image and
+the CRDs ship together and only match when both come from the same revision.
+Helm applies the chart's `crds/` on first install and never again, so a build
+newer than the chart ends up running against the chart's schema. Published
+chart 0.5.0 defines `rulesources` and `ruledata` without a `status`
+subresource; an operator built after that writes RuleSource status to an
+endpoint the API server does not serve, and every patch comes back:
+
+```
+rulesources.waf.k8s.coraza.io "base-rules" not found
+```
+
+Which names the object, not the schema. Three steps later it surfaces as a
+RuleSet stuck on `AwaitingRuleSourceValidation` and `waf.sh on` timing out:
+
+```
+error: timed out waiting for the condition on rulesets/perf-ruleset
+```
+
+`install-operator.sh` warns when it sees a local image with no
+`CORAZA_CRD_DIR`, and `check.sh` asserts both CRDs serve `/status`, so this
+costs seconds to spot rather than an afternoon.
 
 ---
 
@@ -210,11 +288,37 @@ session.
 
 ## Uninstalling
 
+`scripts/teardown.sh` removes only the `waf-perf` namespace, which is usually
+what you want between sessions.
+
+To also remove the operator:
+
 ```bash
-helm uninstall coraza-kubernetes-operator -n coraza-system
-oc delete gatewayclass openshift-default      # OpenShift: also removes the managed Istio
+scripts/prereqs/uninstall-operator.sh              # prompts for the namespace
+scripts/prereqs/uninstall-operator.sh --keep-crds  # leave the CRDs installed
+```
+
+It does the test namespace, the Helm release, `coraza-system`, the
+supplementary RBAC, and the four `waf.k8s.coraza.io` CRDs — in that order,
+which matters. Engines carry a finalizer only the operator clears, so the
+custom resources have to go while the operator is still watching. Remove the
+operator first and the namespace hangs in `Terminating` with nothing left to
+release it.
+
+Deleting the CRDs takes every Engine, RuleSet, RuleSource and RuleData on the
+cluster with them, in any namespace — not only `waf-perf`. Use `--keep-crds`
+on a cluster you share. Helm never removes a chart's `crds/` itself, on
+uninstall or upgrade, so this is always an explicit step.
+
+Istio and the GatewayClass are left alone, on both platforms, and have to go
+by hand:
+
+```bash
+oc delete gatewayclass openshift-default      # OpenShift: the ingress operator's OSSM
 istioctl uninstall --purge -y                 # Kubernetes
 ```
 
-`scripts/teardown.sh` removes only the `waf-perf` namespace. It leaves all of
-the above in place, which is usually what you want between sessions.
+On OpenShift that GatewayClass is what made the cluster ingress operator
+install OSSM in the first place, so removing it affects every Gateway on the
+cluster, not just this harness's. Read `scripts/prereqs/install-istio.sh`
+before you do.

@@ -46,6 +46,7 @@ scripts/suite.sh <scenario-file> [rulesets...]   # canonical: baseline then one 
 scripts/run.sh <scenario-file> [tag]  # one measured run with validity probes
 scripts/collect.sh <start> <end> [tag]  # pull Prometheus metrics for a window
 scripts/teardown.sh                   # delete the namespace; results are kept
+scripts/prereqs/uninstall-operator.sh # also remove the operator, its RBAC and CRDs
 ```
 
 Reporting needs no cluster:
@@ -73,7 +74,13 @@ no arguments; `scripts/prereqs/check.sh` reports what is missing;
   On OpenShift, Istio is installed by the cluster ingress operator in response to a
   GatewayClass — do not install a second control plane by hand.
 - The Coraza Kubernetes Operator, from its published Helm chart. Pin
-  `CORAZA_CHART_VERSION` for anything reportable.
+  `CORAZA_CHART_VERSION` for anything reportable. The chart's ghcr.io image is
+  amd64-only; arm64 needs either the multi-arch Konflux build or your own, and
+  either way `CORAZA_CRD_DIR` must point at that revision's
+  `config/crd/bases` — the chart's CRDs are pinned to the chart, and a newer
+  operator needs fields they do not define. The Konflux stream is staging
+  (SHA tags, no `latest`, collected builds): use it to get a cluster working,
+  not for a reported number.
 - Local tools: `kubectl` or `oc`, `envsubst`, `python3`, `curl`; plus `helm` and,
   on Kubernetes, `istioctl` for the prereq scripts.
 - `PLATFORM` is detected from the cluster when unset, and drives both the CLI and
