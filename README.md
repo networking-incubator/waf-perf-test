@@ -50,27 +50,23 @@ route that platform expects. What that means per platform:
 [Environment requirements](#environment-requirements); the manual equivalents:
 [docs/prerequisites.md](docs/prerequisites.md).
 
-One exception. The chart's ghcr.io release image is `linux/amd64` only, so an
-arm64 cluster (CRC on Apple Silicon) needs a different image — either the
-multi-arch Konflux build or one you build yourself — and the CRDs that match
-it, in the same command:
+One thing it does not take from the chart. The chart's ghcr.io release image is
+`linux/amd64` only, so on arm64 (CRC on Apple Silicon) the operator cannot
+start at all. `install-operator.sh` therefore resolves its own: the newest
+multi-arch Konflux build matching the architecture of the cluster's nodes, and
+the CRDs from that build's commit. No arguments, nothing to set.
 
-```bash
-CORAZA_IMAGE_REPO=quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator \
-CORAZA_IMAGE_TAG=<commit-sha> \
-CORAZA_CRD_DIR=<matching-checkout>/config/crd/bases \
-  scripts/prereqs/install-all.sh
-```
-
-Setting only the image leaves the chart's CRDs in place, and an operator newer
-than the chart then writes status to subresources that schema does not define.
-It installs cleanly, reports Ready on nothing, and `waf.sh on` times out on the
-RuleSet much later. `check.sh` catches it.
+The CRDs come along because they have to. An operator newer than the chart
+writes status to subresources the chart's schema does not define; it installs
+cleanly, reports Ready on nothing, and `waf.sh on` times out on the RuleSet
+much later. `check.sh` catches it.
 
 That Konflux registry is staging — commit-SHA tags, no `latest`, builds get
 garbage-collected — so it is for getting a cluster working, not for a number
-you report. Both routes, and how to record which image actually ran:
-[Architectures](docs/prerequisites.md#architectures).
+you report. `install-operator.sh` prints the chart version, the image digest
+the node actually resolved, and the CRD commit; record all three. To run a
+build of your own instead, set `CORAZA_IMAGE_REPO` with `CORAZA_CRD_DIR`:
+[Image and CRDs](docs/prerequisites.md#image-and-crds).
 
 Run this before the session you intend to report — never between a baseline
 and a WAF-on run, since installing Istio restarts the gateway proxy.
@@ -299,9 +295,12 @@ What it decides for you, and why those are the opinions:
 | Istio | `istioctl`, **minimal** profile — demo adds telemetry addons that compete for CPU with the proxy under test | a GatewayClass on `openshift.io/gateway-controller/v1`, so the **cluster ingress operator** installs OSSM at the version it pins. A hand-installed control plane there is not the one the gateway follows |
 | GatewayClass | `istio` | `openshift-default` |
 | Operator | published Helm chart, newest in the index | same, plus `openshift.enabled` and the `openshift-gateway` revision |
+| Operator image + CRDs | newest downstream build matching the cluster's architecture, and the CRDs from that build's commit — the chart's image is amd64-only and its CRDs lag | same |
 
 Pin `CORAZA_CHART_VERSION` for anything you intend to report — unpinned, two
-runs a week apart may not share an operator. Every other knob has a default in
+runs a week apart may not share an operator. The chart version is no longer the
+whole story: `install-operator.sh` prints the chart, the image and the CRD
+commit, and a report needs all three. Every other knob has a default in
 `lib.sh`.
 
 **What it cannot do for you:**
@@ -980,10 +979,11 @@ waf-perf-test/
 ├── scripts/
 │   ├── prereqs/                  # one-time cluster install: Istio, CRDs, operator
 │   │   ├── check.sh              # verify prerequisites, fail fast
-│   │   ├── install-all.sh        # all of the below, in order, then check
+│   │   ├── install-all.sh        # the three installers, in order, then check
 │   │   ├── install-gateway-api.sh
 │   │   ├── install-istio.sh
 │   │   ├── install-operator.sh
+│   │   ├── resolve-operator-image.sh  # pick a build matching the cluster's arch
 │   │   └── uninstall-operator.sh
 │   ├── setup.sh                  # provision namespace, backend, loadgen, gateway
 │   ├── waf.sh                    # on <ruleset> | off | status

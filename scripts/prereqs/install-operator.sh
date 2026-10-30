@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 #
-# install-operator.sh - Install the Coraza Kubernetes Operator from its
-# published Helm chart. The chart carries its own CRDs.
+# install-operator.sh - Install the Coraza Kubernetes Operator: the published
+# Helm chart for the deployment, a downstream build for the image, and the CRDs
+# that match that image rather than the ones the chart ships.
 #
 #   scripts/prereqs/install-operator.sh
 #
 # Env: CORAZA_CHART_VERSION (pin it for a reportable run), CORAZA_NAMESPACE,
-#      CORAZA_RELEASE, CORAZA_CHART_REPO (defaults in lib.sh)
+#      CORAZA_RELEASE, CORAZA_CHART_REPO, CORAZA_IMAGE_REPO/TAG,
+#      CORAZA_CRD_REF, CORAZA_CRD_DIR (defaults in lib.sh)
 #
-#      CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG override the chart's image — needed
-#      on arm64, where the chart's ghcr.io release is amd64-only.
-#      CORAZA_CRD_DIR must accompany them, pointing at the config/crd/bases of
-#      the revision that image was built from. The chart's CRDs are pinned to
-#      the chart; a newer operator needs fields they do not define, and the
-#      mismatch surfaces three steps later as a RuleSet that never goes Ready.
-#      See 'Architectures' in docs/prerequisites.md.
+# The image is resolved rather than taken from the chart because the chart's
+# ghcr.io release is linux/amd64 only, so on arm64 the pod never starts. That
+# makes the CRD source a consequence, not a separate choice: the resolved tag
+# is a commit in CORAZA_BUILD_REPO, and the CRDs at that commit are the ones
+# the running manager expects.
+#
+# CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG run a build of your own and opt out of
+# both. Set CORAZA_CRD_DIR with them, pointing at the config/crd/bases of the
+# revision that image was built from: the chart's CRDs are pinned to the chart,
+# a newer operator needs fields they do not define, and the mismatch surfaces
+# three steps later as a RuleSet that never goes Ready.
+# See 'Image and CRDs' in docs/prerequisites.md.
 #
 # This installs a release build. To test operator changes you have not shipped,
 # use 'make deploy' in the operator repo instead and skip this script.
@@ -26,6 +33,7 @@ source ./lib.sh
 preflight
 require_platform_match
 require_cmd helm
+require_cmd curl
 
 has_crd wasmplugins.extensions.istio.io || {
   err "Istio is not installed — the operator has nothing to write WasmPlugins to."
@@ -50,69 +58,49 @@ if [[ "${release_status}" == pending-* ]]; then
   helm uninstall "${CORAZA_RELEASE}" -n "${CORAZA_NAMESPACE}" >/dev/null 2>&1 || true
 fi
 
+# Image. The chart's default is published for linux/amd64 only, so on anything
+# else it cannot start at all; resolve-operator-image.sh picks the newest
+# downstream build that actually carries this cluster's architecture, which it
+# reads off the nodes. An explicit CORAZA_IMAGE_REPO still wins — that is the
+# route for a build of your own.
+if [[ -z "${CORAZA_IMAGE_REPO}" ]]; then
+  log "No CORAZA_IMAGE_REPO set — resolving a build for this cluster"
+  eval "$(./scripts/prereqs/resolve-operator-image.sh)"
+  # The resolved tag is a commit in CORAZA_BUILD_REPO, so the CRDs that match
+  # this exact image are reachable. Do not infer that for an image the caller
+  # chose: its tag means nothing in that repo.
+  CORAZA_CRD_REF="${CORAZA_CRD_REF:-${CORAZA_IMAGE_TAG}}"
+fi
+
 args=(upgrade --install "${CORAZA_RELEASE}" "${CORAZA_CHART}"
       --namespace "${CORAZA_NAMESPACE}" --create-namespace
       --wait --timeout 10m)
 
 [[ -n "${CORAZA_CHART_VERSION}" ]] && args+=(--version "${CORAZA_CHART_VERSION}")
 
-# Override the image when the chart's own cannot run here — its ghcr.io
-# release is linux/amd64 only, so an arm64 cluster needs the multi-arch
-# Konflux build or one you built yourself.
-#
-# Tracked, because an image that is not the chart's is also the case where the
-# chart's CRDs are the wrong ones: the two ship together and only match when
-# both come from the same revision. Checked once below, after the fallback
-# that reuses an already-deployed image has had its say.
-custom_image=false
-[[ -n "${CORAZA_IMAGE_REPO}" ]] && { args+=(--set "image.repository=${CORAZA_IMAGE_REPO}"); custom_image=true; }
+[[ -n "${CORAZA_IMAGE_REPO}" ]] && args+=(--set "image.repository=${CORAZA_IMAGE_REPO}")
 [[ -n "${CORAZA_IMAGE_TAG}"  ]] && args+=(--set "image.tag=${CORAZA_IMAGE_TAG}")
 
-# A cluster with no amd64 node cannot pull the published image at all. Catch
-# that before a ten-minute --wait ends in ImagePullBackOff.
-#
-# Every node, not just the first: a mixed-architecture cluster can schedule the
-# operator on an amd64 node, so one arm64 node is no reason to refuse. And
-# listing nodes is a cluster-scoped read that plenty of namespace-scoped
-# credentials do not have — when the list comes back empty we cannot tell
-# "no amd64 nodes" from "not allowed to look", so proceed rather than block on
-# a guess.
-node_arches="$("${CLI}" get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.architecture}{"\n"}{end}' 2>/dev/null | sort -u | tr '\n' ' ' || true)"
-if [[ -z "${node_arches// /}" ]]; then
-  warn "cannot read node architectures; skipping the image-architecture check"
-elif [[ " ${node_arches} " != *" amd64 "* && -z "${CORAZA_IMAGE_REPO}" ]]; then
-  node_arch="${node_arches% }"
-  # An image is already deployed here, so someone solved this before. Re-running
-  # the installer (or install-all.sh, which passes no overrides of its own)
-  # must not refuse to proceed on a cluster that is already working.
-  deployed_image="$("${CLI}" get deploy -n "${CORAZA_NAMESPACE}" \
-    -l app.kubernetes.io/name=coraza-kubernetes-operator \
-    -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>/dev/null || true)"
-  if [[ -n "${deployed_image}" && "${deployed_image##*/}" == *:* ]]; then
-    log "Keeping the operator image already deployed: ${deployed_image}"
-    args+=(--set "image.repository=${deployed_image%:*}" --set "image.tag=${deployed_image##*:}")
-    custom_image=true
-  else
-    err "cluster nodes are '${node_arch}' but the chart's ghcr.io release image is linux/amd64 only."
-    err "Pick an image that runs here and set CORAZA_IMAGE_REPO / CORAZA_IMAGE_TAG, plus"
-    err "CORAZA_CRD_DIR for the matching source revision. Either:"
-    err "  - a multi-arch build from ${CORAZA_IMAGE_ARM64_HINT}"
-    err "    (staging: commit-SHA tags, no 'latest', builds are garbage-collected), or"
-    err "  - one you build yourself."
-    err "See 'Architectures' in docs/prerequisites.md."
-    exit 1
-  fi
-fi
+# When we install the CRDs ourselves, helm must not also try. Helm 4 applies
+# chart CRDs server-side rather than skipping ones that already exist, so it
+# collides with whoever applied them first and aborts the whole install:
+#   conflict with "kubectl-client-side-apply": .spec.versions
+# --skip-crds is the supported way to say "they are handled".
+[[ -n "${CORAZA_CRD_REF}${CORAZA_CRD_DIR}" ]] && args+=(--skip-crds)
 
-# The pairing, stated once where both halves are known. Not fatal: a build
-# close enough to the chart works fine, and only you know which revision the
-# image came from. But this combination is what produces a WAF that installs
-# cleanly, reports Ready on nothing, and times out in waf.sh much later.
-if "${custom_image}" && [[ -z "${CORAZA_CRD_DIR}" ]]; then
+# The pairing, stated once where both halves are known. An image that is not
+# the chart's means the chart's CRDs are not the matching ones either: the two
+# ship together and only agree when both come from the same revision. The
+# resolution above sets CORAZA_CRD_REF itself, so this fires only for an image
+# you chose. Not fatal — a build close enough to the chart works, and only you
+# know which revision yours came from. But it is the combination that produces
+# a WAF installing cleanly, reporting Ready on nothing, and timing out in
+# waf.sh much later.
+if [[ -z "${CORAZA_CRD_REF}" && -z "${CORAZA_CRD_DIR}" ]]; then
   warn "running an operator image that is not the chart's, against the chart's CRDs."
   warn "Set CORAZA_CRD_DIR=<checkout>/config/crd/bases for the revision that image was"
   warn "built from, or the RuleSet may never go Ready."
-  warn "See 'Architectures' in docs/prerequisites.md."
+  warn "See 'Image and CRDs' in docs/prerequisites.md."
 fi
 
 if cluster_is_openshift; then
@@ -132,29 +120,53 @@ else
   warn "No ServiceMonitor CRD — installing without metrics.serviceMonitor"
 fi
 
-log "Installing ${CORAZA_CHART} into '${CORAZA_NAMESPACE}'"
-helm "${args[@]}"
-
-# Helm installs the chart's crds/ on first install and NEVER touches them on
-# upgrade. Upgrading the chart, or switching to a locally built operator, then
-# leaves new code running against old CRDs. That failed here as RuleSource
-# status patches returning "not found", because the older CRD had no status
-# subresource — an error that names the object, not the schema, and sends you
-# looking in the wrong place. Applying them is idempotent; do it every time.
+# CRDs, before the install rather than after it.
 #
-# CORAZA_CRD_DIR overrides the source. Reapplying the chart's CRDs is only a
-# fix while the image is the chart's: against a locally built operator the
-# chart's copies are the stale ones, so this step was faithfully reinstalling
-# the very schema that broke it.
+# Helm lays down a chart's crds/ on first install and NEVER touches them on
+# upgrade, so leaving it to do that left new code running against old CRDs.
+# That failed here as RuleSource status patches returning "not found", because
+# the older CRD had no status subresource — an error that names the object,
+# not the schema, and sends you looking in the wrong place.
+#
+# The chart's are stale in released versions too, not only across upgrades:
+# 0.5.0 ships rulesources and ruledata without that subresource. So prefer, in
+# order, a local checkout, then the commit the image was built from, then the
+# chart's own as a last resort. Applying is idempotent.
+#
+# Before, not after, and paired with --skip-crds above: helm 4 applies chart
+# CRDs server-side rather than skipping existing ones, so letting it go first
+# means the manager comes up against the stale schema, and letting it go at
+# all means a field-manager conflict that aborts the install.
 if [[ -n "${CORAZA_CRD_DIR}" ]]; then
   [[ -d "${CORAZA_CRD_DIR}" ]] || { err "CORAZA_CRD_DIR='${CORAZA_CRD_DIR}' is not a directory"; exit 1; }
   compgen -G "${CORAZA_CRD_DIR}/*.yaml" >/dev/null \
     || { err "no *.yaml in CORAZA_CRD_DIR='${CORAZA_CRD_DIR}'"; exit 1; }
   log "Applying CRDs from CORAZA_CRD_DIR (overrides the chart's)"
-  # Server-side: these were first applied client-side by helm, so the existing
-  # objects carry a last-applied-configuration that field management conflicts
-  # with. --force-conflicts takes ownership rather than failing the install.
-  "${CLI}" apply --server-side --force-conflicts -f "${CORAZA_CRD_DIR}/" >/dev/null
+  "${CLI}" apply --server-side --force-conflicts \
+    --field-manager=waf-perf-test -f "${CORAZA_CRD_DIR}/" >/dev/null
+elif [[ -n "${CORAZA_CRD_REF}" ]]; then
+  log "Applying CRDs from ${CORAZA_BUILD_REPO}@${CORAZA_CRD_REF:0:12}"
+  crd_dir="$(mktemp -d)"
+  fetched=0
+  for crd in engines ruledata rulesets rulesources; do
+    if curl -fsSL -o "${crd_dir}/${crd}.yaml" \
+         "https://raw.githubusercontent.com/${CORAZA_BUILD_REPO}/${CORAZA_CRD_REF}/${CORAZA_BUILD_CRD_PATH}/waf.k8s.coraza.io_${crd}.yaml"; then
+      fetched=$((fetched + 1))
+    else
+      warn "no ${crd} CRD at that commit"
+    fi
+  done
+  if (( fetched > 0 )); then
+    # Server-side, under our own field manager: a CRD left behind by an
+    # earlier client-side apply or by helm is then taken over rather than
+    # fought with on the next run.
+    "${CLI}" apply --server-side --force-conflicts \
+      --field-manager=waf-perf-test -f "${crd_dir}/" >/dev/null
+    ok "Applied ${fetched} CRD(s) matching the image"
+  else
+    warn "fetched none; falling back to whatever the chart installs"
+  fi
+  rm -rf "${crd_dir}"
 elif [[ -d "${CORAZA_CHART}/crds" ]]; then
   log "Applying the chart's CRDs (helm skips these on upgrade)"
   "${CLI}" apply -f "${CORAZA_CHART}/crds/" >/dev/null
@@ -171,6 +183,9 @@ else
   rm -rf "${chart_crds}"
 fi
 
+log "Installing ${CORAZA_CHART} into '${CORAZA_NAMESPACE}'"
+helm "${args[@]}"
+
 # No f-string: backslash escapes inside an f-string expression are a syntax
 # error before Python 3.12, and this silently printed "unknown" because of it.
 installed="$(helm list -n "${CORAZA_NAMESPACE}" -o json 2>/dev/null | python3 -c '
@@ -184,16 +199,24 @@ else:
 
 ok "Coraza operator installed (${installed})."
 
-# The chart renders the image as "{{ repository }}:{{ tag }}" and has no digest
-# field, so a @sha256: reference cannot be passed through CORAZA_IMAGE_TAG.
-# Read back what the node actually resolved instead: a commit-SHA tag in a
-# staging registry can be rebuilt or collected, and the digest is the only
-# thing that still identifies this binary afterwards.
+# The chart version no longer describes what is running: the manager is
+# whatever image was resolved, and the CRDs come from that image's commit.
+#
+# The image is reported as the digest the node resolved, not as the tag we
+# asked for. The chart renders "{{ repository }}:{{ tag }}" and has no digest
+# field, so a @sha256: reference cannot be passed through CORAZA_IMAGE_TAG at
+# all — and a commit-SHA tag in a staging registry can be rebuilt or collected,
+# after which the digest is the only thing still identifying this binary.
 resolved="$("${CLI}" get pods -n "${CORAZA_NAMESPACE}" \
   -l app.kubernetes.io/name=coraza-kubernetes-operator \
   -o jsonpath='{.items[0].status.containerStatuses[0].imageID}' 2>/dev/null || true)"
-[[ -n "${resolved}" ]] && log "Running image: ${resolved}"
-
-warn "Record the chart version and that image digest in any report — both are part"
-warn "of what the number describes."
+log "  image: ${resolved:-${CORAZA_IMAGE_REPO:-chart default}:${CORAZA_IMAGE_TAG:-chart default}}"
+if [[ -n "${CORAZA_CRD_DIR}" ]]; then
+  log "  CRDs:  ${CORAZA_CRD_DIR}"
+elif [[ -n "${CORAZA_CRD_REF}" ]]; then
+  log "  CRDs:  ${CORAZA_BUILD_REPO}@${CORAZA_CRD_REF}"
+else
+  log "  CRDs:  from the chart"
+fi
+warn "Record all three in any report — together they are what the number describes."
 log "Verify the whole stack: scripts/prereqs/check.sh"

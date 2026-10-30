@@ -112,41 +112,44 @@ CORAZA_CHART="${CORAZA_CHART:-coraza-kubernetes-operator/coraza-kubernetes-opera
 CORAZA_CHART_VERSION="${CORAZA_CHART_VERSION:-}"
 CORAZA_NAMESPACE="${CORAZA_NAMESPACE:-coraza-system}"
 CORAZA_RELEASE="${CORAZA_RELEASE:-coraza-kubernetes-operator}"
-# Operator image. Empty means "whatever the chart defaults to", which is the
-# ghcr.io release image for the chart version.
+# Operator image. Empty no longer means "whatever the chart defaults to":
+# install-operator.sh resolves one instead, because the chart's ghcr.io release
+# images are linux/amd64 only — every tag through v0.5.0 is a single-platform
+# index — and on an arm64 cluster (CRC on Apple Silicon) the pod never starts,
+# failing with "no image found in image index for architecture arm64".
 #
-# Those release images are linux/amd64 only — every tag through v0.5.0 is a
-# single-platform index — so on an arm64 cluster (CRC on Apple Silicon) the pod
-# fails with "no image found in image index for architecture arm64". Two ways
-# out, and both need CORAZA_CRD_DIR with them, because neither image is the
-# chart's any more:
-#
-#   - The Konflux stream below publishes linux/amd64 + linux/arm64. It is a
-#     staging registry: tags are commit SHAs, there is no 'latest', and builds
-#     are garbage-collected. Fine for getting a cluster working, not something
-#     to pin a reported number to.
-#   - Build the operator yourself. See docs/prerequisites.md, "Architectures".
-#
-# CORAZA_IMAGE_ARM64_HINT is only ever printed, never applied: which image you
-# run is a decision about what the number describes, so the script names the
-# option and leaves the choice.
+# Set these to run a build of your own, which also opts out of the resolution.
+# Set CORAZA_CRD_DIR with them: once the image is not the chart's, the chart's
+# CRDs are not the matching ones either.
 CORAZA_IMAGE_REPO="${CORAZA_IMAGE_REPO:-}"
 CORAZA_IMAGE_TAG="${CORAZA_IMAGE_TAG:-}"
-CORAZA_IMAGE_ARM64_HINT="${CORAZA_IMAGE_ARM64_HINT:-quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator}"
-# Where install-operator.sh reads the CRDs from. Empty means "the chart's own
-# crds/", which is right whenever the image is the chart's too.
+# Where resolve-operator-image.sh looks. The Konflux push builds here are
+# multi-arch, which is the one thing the chart's image is not. It is a staging
+# registry, not a release channel: tags are commit SHAs, there is no 'latest',
+# builds are garbage-collected, and the images carry no version label. It gets
+# a cluster working; it does not pin a reported number, which is why the
+# installer reads back the resolved digest at the end.
+CORAZA_QUAY_REPO="${CORAZA_QUAY_REPO:-redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator}"
+# Git repo behind those builds. Each image is tagged with its commit here, and
+# that commit carries the CRDs the image expects, so the two are pinned
+# together rather than hoping the chart's are current.
+CORAZA_BUILD_REPO="${CORAZA_BUILD_REPO:-networking-incubator/build-waf}"
+CORAZA_BUILD_CRD_PATH="${CORAZA_BUILD_CRD_PATH:-images/bundle/manifests}"
+# Commit in CORAZA_BUILD_REPO to take CRDs from. Empty means "whatever image
+# was resolved", and it is set for you. Set it by hand only when overriding the
+# image with a build whose tag means nothing in that repo.
+CORAZA_CRD_REF="${CORAZA_CRD_REF:-}"
+# A local directory of CRDs, which beats both of the above. Use it with a build
+# of your own: point it at config/crd/bases in the checkout the image came from.
 #
-# It is not right for a locally built image. The chart's CRDs are pinned to the
-# chart version, the image is not, and the pair has to match: a build newer
-# than the chart needs CRD fields the chart has never heard of. Published
-# chart 0.5.0 ships rulesources and ruledata with no status subresource, so an
-# operator built after that writes RuleSource status into an endpoint the API
-# server does not serve, and every patch comes back "not found" — naming the
-# object, not the schema. The RuleSet then waits on a validation that can never
-# arrive and waf.sh times out on 'oc wait ruleset --for=condition=Ready'.
-#
-# Point this at config/crd/bases in the same checkout the image was built from,
-# always alongside CORAZA_IMAGE_REPO. See docs/prerequisites.md.
+# Why the pairing matters at all. The chart's CRDs are pinned to the chart
+# version, the image is not, and a build newer than the chart needs fields the
+# chart has never heard of. Chart 0.5.0 ships rulesources and ruledata with no
+# status subresource, so a newer operator writes RuleSource status into an
+# endpoint the API server does not serve and every patch comes back "not
+# found" — naming the object, not the schema. The RuleSet then waits on a
+# validation that can never arrive and waf.sh times out on
+# 'oc wait ruleset --for=condition=Ready'. See docs/prerequisites.md.
 CORAZA_CRD_DIR="${CORAZA_CRD_DIR:-}"
 
 # --- logging ----------------------------------------------------------------

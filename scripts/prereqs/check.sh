@@ -64,7 +64,7 @@ crd_has_status() {
 }
 for crd in rulesources ruledata; do
   check "CRD ${crd}.waf.k8s.coraza.io serves /status" \
-    "CRD is older than the operator — reapply with CORAZA_CRD_DIR=<checkout>/config/crd/bases" \
+    "CRD is older than the operator — re-run scripts/prereqs/install-operator.sh, or set CORAZA_CRD_DIR=<checkout>/config/crd/bases for a build of your own" \
     crd_has_status "${crd}.waf.k8s.coraza.io"
 done
 

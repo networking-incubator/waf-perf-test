@@ -74,13 +74,15 @@ no arguments; `scripts/prereqs/check.sh` reports what is missing;
   On OpenShift, Istio is installed by the cluster ingress operator in response to a
   GatewayClass — do not install a second control plane by hand.
 - The Coraza Kubernetes Operator, from its published Helm chart. Pin
-  `CORAZA_CHART_VERSION` for anything reportable. The chart's ghcr.io image is
-  amd64-only; arm64 needs either the multi-arch Konflux build or your own, and
-  either way `CORAZA_CRD_DIR` must point at that revision's
-  `config/crd/bases` — the chart's CRDs are pinned to the chart, and a newer
-  operator needs fields they do not define. The Konflux stream is staging
-  (SHA tags, no `latest`, collected builds): use it to get a cluster working,
-  not for a reported number.
+  `CORAZA_CHART_VERSION` for anything reportable. The chart supplies the
+  deployment only. Its ghcr.io image is amd64-only, so `install-operator.sh`
+  resolves one from the multi-arch Konflux stream instead, and takes the CRDs
+  from that build's commit — the chart's are pinned to the chart version and a
+  newer operator needs fields they do not define. Konflux is staging (SHA tags,
+  no `latest`, collected builds): it gets a cluster working, it does not pin a
+  reported number, which is why the installer prints the resolved image digest.
+  Record chart version, image digest and CRD commit together. `CORAZA_IMAGE_REPO`
+  with `CORAZA_CRD_DIR` overrides both halves for a build of your own.
 - Local tools: `kubectl` or `oc`, `envsubst`, `python3`, `curl`; plus `helm` and,
   on Kubernetes, `istioctl` for the prereq scripts.
 - `PLATFORM` is detected from the cluster when unset, and drives both the CLI and

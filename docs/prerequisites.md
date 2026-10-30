@@ -129,15 +129,34 @@ helm repo add coraza-kubernetes-operator \
 helm repo update
 helm upgrade --install coraza-kubernetes-operator \
   coraza-kubernetes-operator/coraza-kubernetes-operator \
-  --namespace coraza-system --create-namespace
+  --namespace coraza-system --create-namespace \
+  --set openshift.enabled=true \
+  --set istio.revision=openshift-gateway \
+  --set metrics.serviceMonitor.enabled=true
 ```
 
-`scripts/prereqs/install-operator.sh` adds, on OpenShift,
-`--set openshift.enabled=true --set istio.revision=openshift-gateway`. That
-revision must match the control plane the ingress operator created; against the
-wrong revision the operator writes a WasmPlugin no gateway proxy is watching,
-and you measure a WAF that never ran — which [guardrail
-6](../README.md#methodology) exists to catch.
+**The last three flags are not optional on OpenShift.** They are what the
+chart's own [OpenShift
+section](https://github.com/networking-incubator/coraza-kubernetes-operator/tree/main/charts/coraza-kubernetes-operator#openshift)
+supplies as `examples/openshift-values.yaml`; set this way they render
+identically. Without them `helm template` differs in three places:
+
+- `runAsUser: 65532` and `fsGroup: 65532` stay in the pod security context,
+  instead of being omitted so the SCC can assign OpenShift's own UID.
+- The manager loses `--istio-revision=openshift-gateway`. That revision must
+  match the control plane the ingress operator created — check it with
+  `oc get deploy -n openshift-ingress | grep istiod`. Against the wrong
+  revision the operator writes a WasmPlugin no gateway proxy is watching, and
+  you measure a WAF that never ran, which [guardrail
+  6](../README.md#methodology) exists to catch.
+- No ServiceMonitor, so `collect.sh` has nothing to scrape.
+
+On Kubernetes, drop all three.
+
+`install-operator.sh` passes exactly these, and omits the ServiceMonitor one
+when that CRD is absent. It also departs from the command above in what it
+installs: not the chart's default image, and not the chart's CRDs — see [Image
+and CRDs](#image-and-crds).
 
 **Pin the chart version for anything you intend to report:**
 
@@ -151,7 +170,7 @@ apart may not share an operator.
 To test operator changes you have not released, use `make deploy` from the
 operator repo instead and skip this script.
 
-### Architectures
+### Image and CRDs
 
 **The chart's ghcr.io release image is `linux/amd64` only.** Every tag through
 `v0.5.0` is a single-platform index, so on an arm64 cluster — CRC on Apple
@@ -161,38 +180,70 @@ Silicon, say — the pod never starts:
 no image found in image index for architecture "arm64", variant "v8", OS "linux"
 ```
 
-`install-operator.sh` checks the node architecture and stops before the ten
-minute `--wait` rather than letting it end in `ImagePullBackOff`.
-
-Two ways out. **Both need `CORAZA_CRD_DIR` set as well** — see the end of this
-section — because in both cases the image no longer comes from the same
-release as the chart.
-
-#### Option 1: the multi-arch Konflux build
-
-The Konflux pipeline publishes `linux/amd64` + `linux/arm64`:
+So `install-operator.sh` does not use it. With `CORAZA_IMAGE_REPO` unset it
+calls `resolve-operator-image.sh`, which reads the architecture off the cluster
+nodes and picks the newest Konflux build that actually publishes it — that
+pipeline produces `linux/amd64` + `linux/arm64`. The repository is public, so
+the cluster pulls it directly: no local build, no loading into the node, and
+nothing to set.
 
 ```bash
-CORAZA_IMAGE_REPO=quay.io/redhat-user-workloads-stage/waf-tenant/waf-0-7/waf-operator \
-CORAZA_IMAGE_TAG=<commit-sha> \
-CORAZA_CRD_DIR=<matching-checkout>/config/crd/bases \
-  scripts/prereqs/install-all.sh
+scripts/prereqs/install-operator.sh     # resolves the image by itself
 ```
 
-The repository is public, so the cluster pulls it directly — no local build, no
-loading into the node. Know what you are taking on, though:
+Run the resolver alone to see what it would pick. Progress goes to stderr and
+stdout is exactly the two `export` lines, so it composes:
+
+```bash
+scripts/prereqs/resolve-operator-image.sh                        # just look
+eval "$(ARCH=amd64 scripts/prereqs/resolve-operator-image.sh)"   # or pin an arch
+```
+
+**The CRDs follow the image, not the chart.** Each build is tagged with its
+commit in `CORAZA_BUILD_REPO`, and that commit carries the CRDs the manager
+expects, so the script applies those instead. It has to: chart 0.5.0 ships
+`rulesources` and `ruledata` with no status subresource and an `engines`
+without `spec.observability`. A manager that new against CRDs that old fails
+as status patches reporting the object missing when it is the schema that is
+behind — an error that names the object, not the schema, and sends you looking
+in the wrong place. `check.sh` asserts both CRDs serve `/status` so this costs
+seconds rather than an afternoon.
+
+They are applied *before* `helm upgrade`, and the install passes `--skip-crds`
+so helm does not also try. Helm 4 does not skip CRDs that already exist — it
+applies them server-side, which collides with the field manager of whoever
+applied them first and aborts the install outright:
+
+```
+conflict with "kubectl-client-side-apply": .spec.versions
+```
+
+The harness applies with `--server-side --field-manager=waf-perf-test
+--force-conflicts` for the same reason: a CRD left behind by an earlier
+client-side apply gets taken over rather than fought with.
+
+**This is how to get running, not how to produce a number.** Know what you are
+taking on:
 
 - **It is a staging registry.** Tags are commit SHAs and `on-pr-<sha>` builds,
   and they are garbage-collected. There is no `latest`; the registry returns
-  `MANIFEST_UNKNOWN` for it.
-- **It is a different source line.** At the time of writing its `vcs-ref` is
-  not a commit in `networking-incubator/coraza-kubernetes-operator`, and no
-  matching chart exists in the published Helm index.
+  `MANIFEST_UNKNOWN` for it. The images carry `version: unknown`.
+- **It is a different source line.** Its `vcs-ref` is not a commit in
+  `networking-incubator/coraza-kubernetes-operator`, and no matching chart
+  exists in the published Helm index.
 
-Good for getting an arm64 cluster working. Not something to pin a reported
-number to.
+So the chart version alone no longer describes what ran. The script prints the
+chart, the resolved image **digest** — read back from the pod, because a
+commit-SHA tag in a staging registry can be rebuilt or collected — and the CRD
+commit. Record all three.
 
-#### Option 2: build it yourself
+#### Build it yourself
+
+Setting `CORAZA_IMAGE_REPO` / `CORAZA_IMAGE_TAG` opts out of the resolution,
+and with it the CRD pairing. Set `CORAZA_CRD_DIR` alongside them, pointing at
+`config/crd/bases` in the checkout the image was built from; the installer
+warns if you do not. `CORAZA_CRD_REF` takes the downstream CRDs at a named
+commit instead.
 
 Build for your architecture from the operator repo and point the harness at it:
 
